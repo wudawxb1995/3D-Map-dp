@@ -49,76 +49,10 @@ import {
   calculateBounds,
   normalizeCoordinates,
 } from "@/utils/projection";
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-
-// 各省市海拔高度映射表（基于实际平均海拔，单位：米）
-const ELEVATION_DATA = {
-  // 西藏地区 - 最高
-  '西藏': 4000, '拉萨': 3650, '日喀则': 3836, '林芝': 3000, '山南': 3700, '昌都': 3240, '那曲': 4500, '阿里': 4270,
-  
-  // 青海地区
-  '青海': 3000, '西宁': 2275, '海东': 2125, '海北': 3100, '海南': 2850, '黄南': 2500, '果洛': 4200, '玉树': 3700, '海西': 2800,
-  
-  // 四川西部、云南北部
-  '四川': 1500, '甘孜': 3500, '阿坝': 3300, '凉山': 1800, '攀枝花': 1200, '雅安': 1500, '乐山': 500, '绵阳': 500, '德阳': 500, '广元': 800, '南充': 300, '达州': 400, '广安': 300, '遂宁': 300, '内江': 350, '资阳': 400, '眉山': 500, '宜宾': 300, '泸州': 300, '自贡': 350,
-  
-  // 云南
-  '云南': 2000, '昆明': 1892, '曲靖': 1900, '玉溪': 1630, '保山': 1650, '昭通': 1950, '丽江': 2400, '普洱': 1300, '临沧': 1500, '楚雄': 1800, '红河': 1300, '文山': 1250, '西双版纳': 550, '大理': 2000, '德宏': 900, '怒江': 1200, '迪庆': 3300,
-  
-  // 贵州
-  '贵州': 1100, '贵阳': 1071, '六盘水': 1800, '遵义': 865, '安顺': 1390, '铜仁': 275, '毕节': 1510, '黔西南': 1250, '黔东南': 550, '黔南': 830,
-  
-  // 甘肃
-  '甘肃': 1500, '兰州': 1520, '嘉峪关': 1600, '金昌': 1500, '白银': 1700, '天水': 1100, '武威': 1500, '张掖': 1400, '平凉': 1300, '酒泉': 1500, '庆阳': 1200, '定西': 1900, '陇南': 1000, '临夏': 1900, '甘南': 3000,
-  
-  // 新疆
-  '新疆': 1000, '乌鲁木齐': 918, '克拉玛依': 470, '吐鲁番': 35, '哈密': 760, '昌吉': 580, '博尔塔拉': 500, '巴音郭楞': 1200, '阿克苏': 1100, '克孜勒苏': 3000, '喀什': 1300, '和田': 1400, '伊犁': 600, '塔城': 600, '阿勒泰': 800,
-  
-  // 陕西
-  '陕西': 1000, '西安': 397, '铜川': 900, '宝鸡': 570, '咸阳': 400, '渭南': 350, '延安': 1200, '汉中': 500, '榆林': 1100, '安康': 290, '商洛': 700,
-  
-  // 山西
-  '山西': 1000, '太原': 800, '大同': 1000, '阳泉': 700, '长治': 900, '晋城': 700, '朔州': 1000, '晋中': 800, '运城': 400, '忻州': 800, '临汾': 450, '吕梁': 1000,
-  
-  // 内蒙古
-  '内蒙古': 1000, '呼和浩特': 1063, '包头': 1000, '乌海': 1100, '赤峰': 550, '通辽': 180, '鄂尔多斯': 1400, '呼伦贝尔': 650, '巴彦淖尔': 1000, '乌兰察布': 1300, '兴安': 300, '锡林郭勒': 1000, '阿拉善': 1200,
-  
-  // 宁夏
-  '宁夏': 1200, '银川': 1111, '石嘴山': 1100, '吴忠': 1200, '固原': 1750, '中卫': 1200,
-  
-  // 河北
-  '河北': 500, '石家庄': 80, '唐山': 50, '秦皇岛': 10, '邯郸': 60, '邢台': 60, '保定': 20, '张家口': 700, '承德': 400, '沧州': 10, '廊坊': 10, '衡水': 20,
-  
-  // 直辖市
-  '北京': 50, '北京市': 50, '天津': 10, '天津市': 10, '上海': 5, '上海市': 5, '重庆': 400, '重庆市': 400,
-  
-  // 其他省份
-  '山东': 100, '济南': 50, '青岛': 50, '江苏': 10, '南京': 20, '浙江': 100, '杭州': 40, '安徽': 50, '合肥': 30,
-  '河南': 100, '郑州': 100, '湖北': 200, '武汉': 50, '湖南': 200, '长沙': 50, '江西': 100, '南昌': 50,
-  '福建': 200, '福州': 50, '广东': 50, '广州': 20, '广西': 200, '南宁': 100, '海南': 100, '海口': 50,
-  '台湾': 500, '台北': 50, '香港': 50, '澳门': 50,
-  '吉林': 200, '长春': 200, '辽宁': 50, '沈阳': 50, '黑龙江': 200, '哈尔滨': 150
-};
-
-// 根据海拔计算体块高度
-const calculateExtrudeHeight = (provinceName) => {
-  // 获取海拔数据，如果没有匹配则使用默认值
-  const elevation = ELEVATION_DATA[provinceName] || 500; // 默认500米
-  
-  // 将海拔映射到高度范围（20,000 - 150,000）
-  // 最低海拔0米 -> 20,000
-  // 最高海拔5000米 -> 150,000
-  const minHeight = 20000;
-  const maxHeight = 150000;
-  const minElevation = 0;
-  const maxElevation = 5000;
-  
-  // 线性映射公式
-  const normalizedElevation = Math.max(minElevation, Math.min(maxElevation, elevation));
-  const height = minHeight + ((normalizedElevation - minElevation) / (maxElevation - minElevation)) * (maxHeight - minHeight);
-  
-  return height;
-};
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { Line2 } from "three/examples/jsm/lines/Line2.js";
+import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
+import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 
 export default {
   name: "China3DMap",
@@ -132,33 +66,8 @@ export default {
     const rotationAngles = ref({
       x: 0,
       y: 0,
-      z: 0
+      z: 0,
     });
-
-    // 3D配置参数 - 基于Three.js官方示例优化
-    const CONFIG = {
-      extrudeHeight: 20000,
-      hoverHeight: 10000,
-      animationSpeed: 0.1,
-      colors: {
-        base: [
-          0x3498db, 0xe74c3c, 0x2ecc71, 0xf39c12, 0x9b59b6, 0x1abc9c,
-          0xe67e22, 0x34495e, 0x16a085, 0x27ae60, 0x8e44ad, 0xc0392b,
-          0xd35400, 0x2980b9, 0x7d3c98, 0x239b56, 0xbdc3c7, 0x95a5a6,
-          0xf1c40f, 0xe74c3c, 0x3498db, 0x2ecc71, 0xf39c12, 0x9b59b6,
-          0x1abc9c, 0xe67e22, 0x34495e, 0x16a085, 0x27ae60, 0x8e44ad,
-          0xc0392b, 0xd35400, 0x2980b9, 0x7d3c98
-        ],
-        side: 0x2c3e50, // 统一的深石板灰侧面色
-        text: 0xffffff,
-      },
-      // 光照配置 - 基于Three.js官方最佳实践
-      lighting: {
-        ambient: { color: 0xffffff, intensity: 0.4 },
-        directional: { color: 0xffffff, intensity: 0.8, position: [1, 1, 0.5] },
-        hemisphere: { skyColor: 0xffffff, groundColor: 0x080820, intensity: 0.5 }
-      }
-    };
 
     // 禁用鼠标悬停效果 - 注释掉动画配置
     // const ANIMATION_CONFIG = {
@@ -232,24 +141,24 @@ export default {
       scene.background = new THREE.Color(0x0a0a0a);
 
       // 创建相机 - 稍微倾斜的俯视角度，让3D体块占据屏幕的2/3
-      camera = new THREE.PerspectiveCamera(60, width / height, 1, 2000000) // FOV为60
+      camera = new THREE.PerspectiveCamera(60, width / height, 1, 2000000); // FOV为60
       // 设置相机位置：稍微倾斜，不是完全垂直
       // 使用极角约5度的位置作为初始位置
-      const initialPolarAngle = 5 * Math.PI / 180; // 5度
+      const initialPolarAngle = (5 * Math.PI) / 180; // 5度
       const distance = 160000;
       camera.position.set(
         0,
         distance * Math.cos(initialPolarAngle), // Y坐标
-        distance * Math.sin(initialPolarAngle)  // Z坐标
+        distance * Math.sin(initialPolarAngle) // Z坐标
       );
-      camera.lookAt(0, 0, 0)
+      camera.lookAt(0, 0, 0);
       // 设置相机控制目标点
-      camera.target = new THREE.Vector3(0, 0, 0)
+      camera.target = new THREE.Vector3(0, 0, 0);
 
       // 创建渲染器 - 确保不透明渲染
       renderer = new THREE.WebGLRenderer({
         antialias: false,
-        alpha: false // 禁用alpha通道确保不透明背景
+        alpha: false, // 禁用alpha通道确保不透明背景
       });
       renderer.setSize(width, height);
       renderer.shadowMap.enabled = false;
@@ -264,38 +173,41 @@ export default {
       // 添加光源 - 增强光照以显示颜色
       const ambientLight = new THREE.AmbientLight(0xffffff, 0.6); // 环境光
       scene.add(ambientLight);
-      
+
       // 添加方向光 - 从上方照射，突出颜色
       const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
       directionalLight.position.set(0, 100000, 50000); // 从上方和前方照射
       directionalLight.target.position.set(0, 0, 0);
       scene.add(directionalLight);
-      
+
       // 添加补光 - 从下方补光，避免阴影过暗
       const fillLight = new THREE.DirectionalLight(0xffffff, 0.3);
       fillLight.position.set(0, -50000, -30000);
       fillLight.target.position.set(0, 0, 0);
       scene.add(fillLight);
-      
+
       // 添加背景图 - 使用平面几何体，始终面向相机
       const textureLoader = new THREE.TextureLoader();
-      textureLoader.load('/src/assets/image/home/bg.jpg', (texture) => {
+      textureLoader.load("/src/assets/image/home/bg.jpg", (texture) => {
         // 计算背景平面尺寸以完全覆盖视野
         const aspect = width / height;
         const distance = 1500000; // 固定距离
-        const vFov = camera.fov * Math.PI / 180;
+        const vFov = (camera.fov * Math.PI) / 180;
         const viewHeight = 2 * Math.tan(vFov / 2) * distance;
         const viewWidth = viewHeight * aspect;
 
         // 创建平面几何体 - 缩小尺寸
-        const geometry = new THREE.PlaneGeometry(viewWidth * 1.2, viewHeight * 1.2);
+        const geometry = new THREE.PlaneGeometry(
+          viewWidth * 1.2,
+          viewHeight * 1.2
+        );
         const material = new THREE.MeshBasicMaterial({
           map: texture,
           transparent: true,
           opacity: 0.6,
           side: THREE.DoubleSide,
-          depthTest: true,
-          depthWrite: false
+          depthTest: false,
+          depthWrite: false,
         });
 
         const backgroundPlane = new THREE.Mesh(geometry, material);
@@ -307,10 +219,10 @@ export default {
       });
 
       // 添加旋转精灵图 - 在背景图上层
-      textureLoader.load('/src/assets/image/home/bg-ring.png', (texture) => {
+      textureLoader.load("/src/assets/image/home/bg-ring.png", (texture) => {
         // 计算精灵图平面尺寸 - 保持正方形，不拉伸
         const distance = 1400000; // 比背景图稍近一些
-        const vFov = camera.fov * Math.PI / 180;
+        const vFov = (camera.fov * Math.PI) / 180;
         const viewHeight = 2 * Math.tan(vFov / 2) * distance;
 
         // 使用较小的尺寸作为正方形的边长，保持环形图不变形
@@ -324,7 +236,7 @@ export default {
           opacity: 0.8,
           side: THREE.DoubleSide,
           depthTest: true,
-          depthWrite: false
+          depthWrite: false,
         });
 
         const ringPlane = new THREE.Mesh(geometry, material);
@@ -402,11 +314,13 @@ export default {
 
       // 处理几何数据
       let geometries = [];
+      let borderCoordinates = []; // 存储边界坐标用于绘制边界线
 
       if (feature.geometry.type === "Polygon") {
         geometries = feature.geometry.coordinates.map((polygon) => {
           const coords = coordinatesToMercator(polygon);
           const normalized = normalizeCoordinates(coords, center);
+          borderCoordinates.push(normalized); // 保存边界坐标
           return createShapeGeometry(normalized, scale);
         });
       } else if (feature.geometry.type === "MultiPolygon") {
@@ -414,6 +328,7 @@ export default {
           multi.forEach((polygon) => {
             const coords = coordinatesToMercator(polygon);
             const normalized = normalizeCoordinates(coords, center);
+            borderCoordinates.push(normalized); // 保存边界坐标
             geometries.push(createShapeGeometry(normalized, scale));
           });
         });
@@ -458,11 +373,66 @@ export default {
         provinceGroup.add(mesh);
       });
 
+      // 创建边界线 - 基于各省的边界经纬度
+      borderCoordinates.forEach((coordinates) => {
+        // 创建边界线的点数组
+        // 边界线需要在XY平面上创建（与ShapeGeometry相同），然后一起旋转
+        const positions = [];
+        coordinates.forEach((coord) => {
+          const x = coord[0] * scale;
+          const y = coord[1] * scale;
+          // 在XY平面上创建点，Z坐标为10（稍微抬高避免z-fighting）
+          positions.push(x, y, 10);
+        });
+
+        // 使用 LineGeometry 创建支持线宽的几何体
+        const lineGeometry = new LineGeometry();
+        lineGeometry.setPositions(positions);
+
+        // 使用 LineMaterial 创建支持线宽的材质
+        const lineMaterial = new LineMaterial({
+          color: 0x118cbc, // #118cbc
+          linewidth: 2, // 线宽（单位：像素）
+          transparent: true,
+          opacity: 0.3,
+          depthWrite: false,
+          depthTest: false,
+        });
+
+        // 设置材质分辨率（必须设置才能正确显示线宽）
+        lineMaterial.resolution.set(
+          container.value.clientWidth,
+          container.value.clientHeight
+        );
+
+        // 创建 Line2 对象（支持线宽）
+        const line = new Line2(lineGeometry, lineMaterial);
+
+        // 旋转线条，与顶面保持一致（绕X轴旋转-90度）
+        line.rotation.x = -Math.PI / 2;
+
+        // 设置位置：将边界线放置在顶面的Y坐标上（稍微抬高避免z-fighting）
+        line.position.y = actualExtrudeHeight + 10;
+
+        // 设置渲染顺序，确保边界线在顶面之上
+        line.renderOrder = 3;
+
+        // 保存 LineMaterial 引用，用于窗口调整时更新分辨率
+        if (!scene.userData.lineMaterials) {
+          scene.userData.lineMaterials = [];
+        }
+        scene.userData.lineMaterials.push(lineMaterial);
+
+        provinceGroup.add(line);
+      });
+
       scene.add(provinceGroup);
 
       provinces.push({
         group: provinceGroup,
-        meshes: provinceGroup.children.filter((child) => child.type === "Mesh" && child.geometry),
+        meshes: provinceGroup.children.filter(
+          (child) => child.type === "Mesh" && child.geometry
+        ),
         name: provinceName,
       });
     };
@@ -499,10 +469,13 @@ export default {
         // extrudeSettings - 使用适合当前场景的高度
         const extrudeSettings = {
           depth: 15000, // 与省份顶面高度一致
-          bevelEnabled: false
+          bevelEnabled: false,
         };
 
-        const extrudeGeometry = new THREE.ExtrudeGeometry(geometry, extrudeSettings);
+        const extrudeGeometry = new THREE.ExtrudeGeometry(
+          geometry,
+          extrudeSettings
+        );
 
         // 🔧 修复UV坐标 - 让光带垂直流动（从底到顶）
         const uvAttribute = extrudeGeometry.attributes.uv;
@@ -546,7 +519,7 @@ export default {
           uniforms: {
             time: { value: 0.0 },
             num: { value: 3.0 }, // 光带数量
-            color1: { value: new THREE.Color('#00FFFF') }
+            color1: { value: new THREE.Color("#00FFFF") },
           },
           vertexShader: `
             varying vec2 vUv;
@@ -585,7 +558,7 @@ export default {
               float alpha = 1.0 - bands;
 
               gl_FragColor = vec4(color1, alpha);
-            }`
+            }`,
         });
 
         // 保存材质引用，用于动画更新
@@ -683,17 +656,27 @@ export default {
       camera.updateProjectionMatrix();
       renderer.setSize(width, height);
 
+      // 更新所有 LineMaterial 的分辨率
+      if (scene.userData.lineMaterials) {
+        scene.userData.lineMaterials.forEach((material) => {
+          material.resolution.set(width, height);
+        });
+      }
+
       // 更新背景平面尺寸以适配新的屏幕尺寸
       if (scene.userData.backgroundPlane) {
         const aspect = width / height;
         const distance = 1500000; // 固定距离
-        const vFov = camera.fov * Math.PI / 180;
+        const vFov = (camera.fov * Math.PI) / 180;
         const viewHeight = 2 * Math.tan(vFov / 2) * distance;
         const viewWidth = viewHeight * aspect;
 
         // 更新几何体 - 缩小尺寸
         scene.userData.backgroundPlane.geometry.dispose();
-        scene.userData.backgroundPlane.geometry = new THREE.PlaneGeometry(viewWidth * 1.2, viewHeight * 1.2);
+        scene.userData.backgroundPlane.geometry = new THREE.PlaneGeometry(
+          viewWidth * 1.2,
+          viewHeight * 1.2
+        );
       }
     };
 
@@ -708,9 +691,9 @@ export default {
 
       // 启用左键拖动平移，右键旋转，滚轮缩放
       controls.mouseButtons = {
-        LEFT: THREE.MOUSE.PAN,      // 左键平移
-        MIDDLE: THREE.MOUSE.DOLLY,  // 中键缩放
-        RIGHT: THREE.MOUSE.ROTATE   // 右键旋转
+        LEFT: THREE.MOUSE.PAN, // 左键平移
+        MIDDLE: THREE.MOUSE.DOLLY, // 中键缩放
+        RIGHT: THREE.MOUSE.ROTATE, // 右键旋转
       };
 
       controls.enableRotate = true; // 启用旋转
@@ -733,8 +716,8 @@ export default {
       // 0度 = 正上方（+Y轴，垂直俯视），90度 = 水平，180度 = 正下方（-Y轴）
       // 当前相机初始位置在极角5度
       // 允许从接近垂直（0.5度）到倾斜20度，避免完全到达0度边界
-      controls.minPolarAngle = 0.5 * Math.PI / 180; // 0.5度（接近垂直，但不完全到达边界）
-      controls.maxPolarAngle = 60 * Math.PI / 180; // 20度（允许向下倾斜20度）
+      controls.minPolarAngle = (0.5 * Math.PI) / 180; // 0.5度（接近垂直，但不完全到达边界）
+      controls.maxPolarAngle = (60 * Math.PI) / 180; // 20度（允许向下倾斜20度）
 
       controls.target.set(0, 0, 0); // 设置目标点为场景中心
     };
@@ -766,7 +749,9 @@ export default {
 
         // 将背景平面放置在相机视线方向的远处
         const distance = 1500000;
-        backgroundPlane.position.copy(camera.position).add(cameraDirection.multiplyScalar(distance));
+        backgroundPlane.position
+          .copy(camera.position)
+          .add(cameraDirection.multiplyScalar(distance));
 
         // 使背景平面始终面向相机
         backgroundPlane.lookAt(camera.position);
@@ -790,7 +775,9 @@ export default {
 
         // 将旋转精灵图放置在相机视线方向的远处（比背景图稍近）
         const distance = 1400000;
-        ringPlane.position.copy(camera.position).add(cameraDirection.multiplyScalar(distance));
+        ringPlane.position
+          .copy(camera.position)
+          .add(cameraDirection.multiplyScalar(distance));
 
         // 创建一个临时四元数来保存面向相机的旋转
         const quaternion = new THREE.Quaternion();
@@ -802,7 +789,10 @@ export default {
 
         // 创建绕Z轴旋转的四元数（自转）
         const rotationQuaternion = new THREE.Quaternion();
-        rotationQuaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), ringPlane.userData.rotationAngle);
+        rotationQuaternion.setFromAxisAngle(
+          new THREE.Vector3(0, 0, 1),
+          ringPlane.userData.rotationAngle
+        );
 
         // 组合两个旋转：先面向相机，再自转
         ringPlane.quaternion.copy(quaternion).multiply(rotationQuaternion);
@@ -833,8 +823,10 @@ export default {
         const polarAngle = controls.getPolarAngle();
         const azimuthalAngle = controls.getAzimuthalAngle();
 
-        rotationAngles.value.x = Math.round(polarAngle * 180 / Math.PI * 100) / 100; // 极角（俯仰）
-        rotationAngles.value.y = Math.round(azimuthalAngle * 180 / Math.PI * 100) / 100; // 方位角（水平旋转）
+        rotationAngles.value.x =
+          Math.round(((polarAngle * 180) / Math.PI) * 100) / 100; // 极角（俯仰）
+        rotationAngles.value.y =
+          Math.round(((azimuthalAngle * 180) / Math.PI) * 100) / 100; // 方位角（水平旋转）
         rotationAngles.value.z = 0;
       }
 
@@ -898,7 +890,7 @@ export default {
   padding: 20px;
   border-radius: 10px;
   color: #fff;
-  font-family: 'Courier New', monospace;
+  font-family: "Courier New", monospace;
   font-size: 14px;
   backdrop-filter: blur(10px);
   border: 1px solid rgba(255, 255, 255, 0.15);
