@@ -306,6 +306,35 @@ export default {
         scene.add(backgroundPlane);
       });
 
+      // 添加旋转精灵图 - 在背景图上层
+      textureLoader.load('/src/assets/image/home/bg-ring.png', (texture) => {
+        // 计算精灵图平面尺寸 - 保持正方形，不拉伸
+        const distance = 1400000; // 比背景图稍近一些
+        const vFov = camera.fov * Math.PI / 180;
+        const viewHeight = 2 * Math.tan(vFov / 2) * distance;
+
+        // 使用较小的尺寸作为正方形的边长，保持环形图不变形
+        const ringSize = viewHeight * 0.6 * 1.8; // 扩大三倍
+
+        // 创建正方形平面几何体 - 保持环形图不变形
+        const geometry = new THREE.PlaneGeometry(ringSize, ringSize);
+        const material = new THREE.MeshBasicMaterial({
+          map: texture,
+          transparent: true,
+          opacity: 0.8,
+          side: THREE.DoubleSide,
+          depthTest: true,
+          depthWrite: false
+        });
+
+        const ringPlane = new THREE.Mesh(geometry, material);
+        ringPlane.renderOrder = -998; // 比背景图高一层
+
+        // 保存旋转精灵图引用，用于窗口调整、相机跟随和旋转动画
+        scene.userData.ringPlane = ringPlane;
+        scene.add(ringPlane);
+      });
+
       // 禁用鼠标悬停效果 - 不再需要射线检测器
       // raycaster = new THREE.Raycaster();
       // mouse = new THREE.Vector2();
@@ -741,6 +770,42 @@ export default {
 
         // 使背景平面始终面向相机
         backgroundPlane.lookAt(camera.position);
+      }
+
+      // 更新旋转精灵图位置、旋转和动画
+      if (scene.userData.ringPlane) {
+        const ringPlane = scene.userData.ringPlane;
+
+        // 初始化旋转角度
+        if (ringPlane.userData.rotationAngle === undefined) {
+          ringPlane.userData.rotationAngle = 0;
+        }
+
+        // 每帧累加旋转角度（顺时针）
+        ringPlane.userData.rotationAngle -= 0.01;
+
+        // 计算相机方向向量
+        const cameraDirection = new THREE.Vector3();
+        camera.getWorldDirection(cameraDirection);
+
+        // 将旋转精灵图放置在相机视线方向的远处（比背景图稍近）
+        const distance = 1400000;
+        ringPlane.position.copy(camera.position).add(cameraDirection.multiplyScalar(distance));
+
+        // 创建一个临时四元数来保存面向相机的旋转
+        const quaternion = new THREE.Quaternion();
+
+        // 创建旋转矩阵使平面面向相机
+        const matrix = new THREE.Matrix4();
+        matrix.lookAt(ringPlane.position, camera.position, camera.up);
+        quaternion.setFromRotationMatrix(matrix);
+
+        // 创建绕Z轴旋转的四元数（自转）
+        const rotationQuaternion = new THREE.Quaternion();
+        rotationQuaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), ringPlane.userData.rotationAngle);
+
+        // 组合两个旋转：先面向相机，再自转
+        ringPlane.quaternion.copy(quaternion).multiply(rotationQuaternion);
       }
 
       // 体块保持固定朝向，不需要动态旋转
