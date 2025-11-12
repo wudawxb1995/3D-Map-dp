@@ -301,6 +301,9 @@ export default {
       chinaBorderData.features.forEach((feature) => {
         createBorderSideMesh(feature, center, scale);
       });
+
+      // 3. 创建中国边界线动画（基于 chinaBorderData，排除台湾）
+      createChinaBorderLineAnimation(center, scale);
     };
 
     /**
@@ -392,9 +395,9 @@ export default {
         // 使用 LineMaterial 创建支持线宽的材质
         const lineMaterial = new LineMaterial({
           color: 0x118cbc, // #118cbc
-          linewidth: 2, // 线宽（单位：像素）
+          linewidth: 2.2, // 线宽（单位：像素）
           transparent: true,
-          opacity: 0.3,
+          opacity: 0.9,
           depthWrite: false,
           depthTest: false,
         });
@@ -613,6 +616,134 @@ export default {
       return shape;
     };
 
+    /**
+     * 创建中国边界线动画（基于 chinaBorderData）
+     * 排除台湾省，添加动画效果
+     */
+    const createChinaBorderLineAnimation = (center, scale) => {
+      const actualExtrudeHeight = 15000; // 与省份高度一致
+
+      console.log('chinaBorderData features数量:', chinaBorderData.features.length);
+      chinaBorderData.features.forEach(f => {
+        console.log('Feature名称:', f.properties.name);
+      });
+
+      // 收集所有边界坐标（排除台湾）
+      const allBorderCoordinates = [];
+
+      chinaBorderData.features.forEach((feature) => {
+        const borderName = feature.properties.name;
+
+        // 排除台湾省
+        if (borderName && borderName.includes('台湾')) {
+          console.log('排除台湾省');
+          return;
+        }
+
+        console.log('处理边界:', borderName);
+
+        if (feature.geometry.type === "Polygon") {
+          feature.geometry.coordinates.forEach((polygon) => {
+            const coords = coordinatesToMercator(polygon);
+            const normalized = normalizeCoordinates(coords, center);
+            console.log('添加Polygon边界，点数:', normalized.length);
+            allBorderCoordinates.push(normalized);
+          });
+        } else if (feature.geometry.type === "MultiPolygon") {
+          feature.geometry.coordinates.forEach((multi) => {
+            multi.forEach((polygon) => {
+              const coords = coordinatesToMercator(polygon);
+              const normalized = normalizeCoordinates(coords, center);
+              console.log('添加MultiPolygon边界，点数:', normalized.length);
+              allBorderCoordinates.push(normalized);
+            });
+          });
+        }
+      });
+
+      console.log('收集到的边界数量:', allBorderCoordinates.length);
+
+      // 为每个边界创建动画线条
+      const borderLines = [];
+
+      allBorderCoordinates.forEach((coordinates) => {
+        // 准备完整的点位数据
+        const fullPositions = [];
+        coordinates.forEach((coord) => {
+          const x = coord[0] * scale;
+          const y = coord[1] * scale;
+          fullPositions.push(x, y, 15); // Z=15 避免z-fighting
+        });
+
+        // 跳过点数太少的边界（至少需要2个点才能绘制线段）
+        if (fullPositions.length < 6) {
+          return;
+        }
+
+        const totalPoints = fullPositions.length / 3; // 总点数
+        const halfPoints = Math.floor(totalPoints / 3); // 一半的点数
+
+        // 创建 LineGeometry - 初始显示前一半的点
+        const lineGeometry = new LineGeometry();
+        const initialPositions = fullPositions.slice(0, halfPoints * 3);
+        lineGeometry.setPositions(initialPositions);
+
+        // 创建 LineMaterial
+        const lineMaterial = new LineMaterial({
+          color: 0xffffFF, // 使用正确的颜色
+          linewidth: 4, // 4px
+          transparent: true,
+          opacity: 1, // 透明度1
+          depthWrite: false,
+          depthTest: false,
+        });
+
+        // 设置材质分辨率
+        lineMaterial.resolution.set(
+          container.value.clientWidth,
+          container.value.clientHeight
+        );
+
+        // 创建 Line2
+        const line = new Line2(lineGeometry, lineMaterial);
+        line.computeLineDistances(); // 计算线段距离
+
+        // 旋转和位置设置
+        line.rotation.x = -Math.PI / 2;
+        line.position.y = actualExtrudeHeight + 15;
+        line.renderOrder = 4; // 确保在省份边界线之上
+
+        scene.add(line);
+
+        // 保存线条信息用于动画
+        borderLines.push({
+          line,
+          geometry: lineGeometry,
+          material: lineMaterial,
+          fullPositions,
+          totalPoints,
+          halfPoints,
+          startIndex: 0, // 当前显示的起始点索引
+        });
+
+        // 保存 LineMaterial 引用
+        if (!scene.userData.lineMaterials) {
+          scene.userData.lineMaterials = [];
+        }
+        scene.userData.lineMaterials.push(lineMaterial);
+      });
+
+      // 保存边界线数组到 scene.userData
+      scene.userData.borderLines = borderLines;
+
+      // 调试信息
+      console.log('创建了边界线数量:', borderLines.length);
+      if (borderLines.length > 0) {
+        console.log('第一条边界线总点数:', borderLines[0].totalPoints);
+        console.log('第一条边界线显示点数:', borderLines[0].halfPoints);
+      }
+    };
+
     // 添加事件监听器
     const addEventListeners = () => {
       // 禁用鼠标悬停效果，不再监听鼠标移动和离开事件
@@ -813,6 +944,47 @@ export default {
                 material.uniforms.time.value += 0.002;
               }
             });
+          }
+        });
+      }
+
+
+
+      // 更新中国边界线动画 - 滚动显示一半的点（头尾连贯）
+      if (scene.userData.borderLines) {
+        scene.userData.borderLines.forEach((borderLine) => {
+          // 每帧移动起始索引（控制动画速度）
+          borderLine.startIndex += 1; // 每帧前进2个点
+
+          // 循环播放：当起始索引超出总点数时重置
+          if (borderLine.startIndex >= borderLine.totalPoints) {
+            borderLine.startIndex = 0;
+          }
+
+          // 构建当前应该显示的点位数组（头尾连贯）
+          const currentPositions = [];
+
+          for (let i = 0; i < borderLine.halfPoints; i++) {
+            // 计算当前点的索引（循环取模）
+            const pointIndex = (borderLine.startIndex + i) % borderLine.totalPoints;
+            const posIndex = pointIndex * 3;
+
+            // 添加该点的x, y, z坐标
+            currentPositions.push(
+              borderLine.fullPositions[posIndex],
+              borderLine.fullPositions[posIndex + 1],
+              borderLine.fullPositions[posIndex + 2]
+            );
+          }
+
+          // 更新Line2
+          borderLine.geometry.setPositions(currentPositions);
+          borderLine.line.computeLineDistances();
+
+          // 标记geometry需要更新
+          if (borderLine.geometry.attributes.instanceStart) {
+            borderLine.geometry.attributes.instanceStart.needsUpdate = true;
+            borderLine.geometry.attributes.instanceEnd.needsUpdate = true;
           }
         });
       }
