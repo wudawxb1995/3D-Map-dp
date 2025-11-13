@@ -53,6 +53,12 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { Line2 } from "three/examples/jsm/lines/Line2.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
+import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js';
+import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js';
+
+
+import FZLISHU_TYPEFACE_URL from '@/assets/fonts/FZLiShu-S01_Regular.json?url';
+import FZWEIBEI_TYPEFACE_URL from '@/assets/fonts/FZWeiBei-S03_Regular.json?url';
 
 export default {
   name: "China3DMap",
@@ -68,73 +74,38 @@ export default {
     let hoveredMesh = null; // 当前悬停的网格
     const originalColors = new Map(); // 保存原始颜色
 
+    // 3D文字标签相关变量
+    let currentTextLabel = null; // 当前显示的3D文字标签
+
+    let cnFont = null; // 中文 typeface.json 字体对象（TextGeometry 使用）
+    // 最近一次标签状态（用于在中文字体JSON加载后自动创建文字）
+    let lastLabelState = { text: '', position: null, baseHeight: 0 };
+
+    // 本地 assets 下提供的中文 typeface.json 候选列表（存在其一即可）
+    const CN_TYPEFACE_CANDIDATES = [
+      FZLISHU_TYPEFACE_URL,
+      FZWEIBEI_TYPEFACE_URL,
+    ];
+
+    const LABEL_CONFIG = {
+      floatHeight: 2000, // 基础浮动高度（米）- 提高文字顶面高度
+      floatRange: 20, // 浮动范围（10-30米）
+      floatSpeed: 0.001, // 浮动速度
+      fontSize: 3000, // 字体大小
+      textColor: 0xffff00, // 文字颜色（金黄色）
+      outlineColor: 0xFFD700, // 边缘颜色（金黄色）
+      textDepth: 500, // 文字厚度 - 加深厚度
+      bevelEnabled: true, // 启用斜角
+      bevelThickness: 50, // 斜角厚度
+      bevelSize: 30, // 斜角大小
+    };
+
     // 旋转角度显示（响应式数据）
     const rotationAngles = ref({
       x: 0,
       y: 0,
       z: 0,
     });
-
-    // 禁用鼠标悬停效果 - 注释掉动画配置
-    // const ANIMATION_CONFIG = {
-    //   duration: 300, // 动画持续时间(ms)
-    //   easing: 'ease-out',
-    //   debounceDelay: 100, // 防抖延迟(ms)
-    // };
-
-    // 禁用鼠标悬停效果 - 注释掉相关函数
-    // const debounce = (func, delay) => {
-    //   let timeoutId;
-    //   return (...args) => {
-    //     clearTimeout(timeoutId);
-    //     timeoutId = setTimeout(() => func.apply(this, args), delay);
-    //   };
-    // };
-
-    // const animateMesh = (mesh, targetY, duration = ANIMATION_CONFIG.duration) => {
-    //   const startY = mesh.position.y;
-    //   const deltaY = targetY - startY;
-    //   const startTime = Date.now();
-
-    //   const animate = () => {
-    //     const elapsed = Date.now() - startTime;
-    //     const progress = Math.min(elapsed / duration, 1);
-    //
-    //     // 使用缓动函数
-    //     const easedProgress = 1 - Math.pow(1 - progress, 3); // ease-out
-    //
-    //     mesh.position.y = startY + deltaY * easedProgress;
-    //
-    //     if (progress < 1) {
-    //       requestAnimationFrame(animate);
-    //     }
-    //   };
-    //
-    //   animate();
-    // };
-
-    // 禁用鼠标悬停效果 - 注释掉相关函数
-    // let lastHoveredProvince = null;
-
-    // const debouncedHover = debounce((province) => {
-    //   if (province !== lastHoveredProvince) {
-    //     // 处理新的悬停
-    //     if (province) {
-    //       province.meshes.forEach(mesh => {
-    //         animateMesh(mesh, mesh.userData.originalPosition.y + CONFIG.hoverHeight);
-    //       });
-    //     }
-    //
-    //     // 处理离开
-    //     if (lastHoveredProvince && lastHoveredProvince !== province) {
-    //       lastHoveredProvince.meshes.forEach(mesh => {
-    //         animateMesh(mesh, mesh.userData.originalPosition.y);
-    //       });
-    //     }
-    //
-    //     lastHoveredProvince = province;
-    //   }
-    // }, ANIMATION_CONFIG.debounceDelay);
 
     // 初始化Three.js场景
     const initScene = () => {
@@ -267,6 +238,188 @@ export default {
 
       // 开始渲染
       animate();
+    };
+
+
+
+    /**
+     * 加载字体
+     */
+
+
+    /**
+     * 创建3D文字标签（TextGeometry 挤出中文）
+     * @param {string} text - 要显示的文字
+     * @param {THREE.Vector3} position - 文字位置
+     * @param {number} baseHeight - 地块顶面高度
+     */
+    const create3DTextLabel = (text, position, baseHeight) => {
+      // 清理上一份
+      if (currentTextLabel) {
+        scene.remove(currentTextLabel);
+
+        if (currentTextLabel.dispose) {
+          // Troika Text 对象
+          currentTextLabel.dispose();
+        } else {
+          // 普通Mesh/Group
+          if (currentTextLabel.geometry) currentTextLabel.geometry.dispose();
+          if (currentTextLabel.material) {
+            if (Array.isArray(currentTextLabel.material)) currentTextLabel.material.forEach(m=>m.dispose());
+            else currentTextLabel.material.dispose();
+          }
+
+        }
+        currentTextLabel = null;
+      }
+
+      // 记录最近一次标签状态，用于字体JSON加载后自动创建文字
+      lastLabelState = {
+        text,
+        position: (position && position.clone) ? position.clone() : position,
+        baseHeight
+      };
+
+      // 字体未就绪则等待 loadChineseTypeface 成功后再创建
+      if (!cnFont) {
+        return;
+      }
+
+      // 使用 TextGeometry 挤出中文
+      const geometry = new TextGeometry(text, {
+            font: cnFont,
+            size: LABEL_CONFIG.fontSize,
+            height: LABEL_CONFIG.textDepth,
+            curveSegments: 12,
+            bevelEnabled: LABEL_CONFIG.bevelEnabled,
+            bevelThickness: LABEL_CONFIG.bevelThickness,
+            bevelSize: LABEL_CONFIG.bevelSize,
+            bevelSegments: 5
+          });
+          geometry.computeBoundingBox();
+          const centerOffset = -0.5 * (geometry.boundingBox.max.x - geometry.boundingBox.min.x);
+
+          // 3D文字材质：确保始终显示在最上层
+          const materials = [
+            new THREE.MeshPhongMaterial({
+              color: LABEL_CONFIG.textColor,
+              flatShading: true,
+              side: THREE.DoubleSide,
+              transparent: true, // 启用透明以支持renderOrder排序
+              opacity: 1.0, // 完全不透明
+              emissive: LABEL_CONFIG.textColor, // 自发光颜色
+              emissiveIntensity: 0.5, // 自发光强度
+              depthTest: false, // 禁用深度测试，始终显示在最前面
+              depthWrite: false // 禁用深度写入，不被其他物体遮挡
+            }), // front/back
+            new THREE.MeshPhongMaterial({
+              color: LABEL_CONFIG.outlineColor,
+              transparent: true, // 启用透明以支持renderOrder排序
+              opacity: 1.0, // 完全不透明
+              emissive: LABEL_CONFIG.outlineColor, // 自发光颜色
+              emissiveIntensity: 0.5, // 自发光强度
+              depthTest: false, // 禁用深度测试，始终显示在最前面
+              depthWrite: false // 禁用深度写入，不被其他物体遮挡
+            }) // side
+          ];
+
+          const textMesh = new THREE.Mesh(geometry, materials);
+          // 文字与顶面垂直：Y轴为高度方向，文字竖立在顶面上
+          textMesh.position.set(position.x + centerOffset, baseHeight + LABEL_CONFIG.floatHeight, position.z);
+          // 初始旋转设置为0，后续在动画循环中始终面向相机
+          textMesh.rotation.set(0, 0, 0);
+          // 设置渲染顺序为最高，确保3D文字始终显示在最上层
+          textMesh.renderOrder = 999;
+          textMesh.userData = { baseY: baseHeight + LABEL_CONFIG.floatHeight, floatOffset: 0, renderer: 'textgeometry' };
+          scene.add(textMesh);
+          currentTextLabel = textMesh;
+          return;
+    };
+
+    /**
+     * 计算省份的中心点（考虑所有mesh，适用于MultiPolygon）
+     * @param {Object} province - 省份对象，包含meshes数组
+     * @returns {THREE.Vector3} 中心点坐标
+     */
+    const calculateProvinceCenter = (province) => {
+      if (!province || !province.meshes || province.meshes.length === 0) {
+        return new THREE.Vector3(0, 0, 0);
+      }
+
+      // 收集所有mesh的所有顶点
+      let totalVertices = 0;
+      const center = new THREE.Vector3(0, 0, 0);
+
+      province.meshes.forEach(mesh => {
+        const geometry = mesh.geometry;
+        const positionAttribute = geometry.attributes.position;
+
+        if (!positionAttribute) return;
+
+        const vertexCount = positionAttribute.count;
+
+        for (let i = 0; i < vertexCount; i++) {
+          const vertex = new THREE.Vector3(
+            positionAttribute.getX(i),
+            positionAttribute.getY(i),
+            positionAttribute.getZ(i)
+          );
+
+          // 应用mesh的变换矩阵
+          vertex.applyMatrix4(mesh.matrixWorld);
+
+          center.x += vertex.x;
+          center.y += vertex.y;
+          center.z += vertex.z;
+          totalVertices++;
+        }
+      });
+
+      if (totalVertices > 0) {
+        center.x /= totalVertices;
+        center.y /= totalVertices;
+        center.z /= totalVertices;
+      }
+
+      return center;
+    };
+
+
+    /**
+     * 预加载中文 typeface.json（顺序尝试 public/fonts 下的候选文件）
+     * 成功后赋值 cnFont，用于 TextGeometry 挤出中文
+     */
+    const loadChineseTypeface = () => {
+      const loader = new FontLoader();
+      let idx = 0;
+      const tryLoad = () => {
+        if (idx >= CN_TYPEFACE_CANDIDATES.length) {
+          console.warn('⚠️ 未找到可用的中文 typeface.json');
+          return;
+        }
+        const url = CN_TYPEFACE_CANDIDATES[idx];
+        loader.load(
+          url,
+          (loaded) => {
+            cnFont = loaded;
+  
+            // 字体加载完毕后，如有上一次悬停记录则创建
+            try {
+              if (lastLabelState?.text && lastLabelState.position) {
+                create3DTextLabel(lastLabelState.text, lastLabelState.position, lastLabelState.baseHeight);
+              }
+            } catch (e) {
+              console.warn('⚠️ 切换为TextGeometry失败（加载后重建）:', e);
+            }
+          },
+          undefined,
+          () => {
+            idx++;
+            tryLoad();
+          }
+        );
+      };
+      tryLoad();
     };
 
     // 处理地理数据
@@ -628,10 +781,6 @@ export default {
     const createChinaBorderLineAnimation = (center, scale) => {
       const actualExtrudeHeight = 15000; // 与省份高度一致
 
-      console.log('chinaBorderData features数量:', chinaBorderData.features.length);
-      chinaBorderData.features.forEach(f => {
-        console.log('Feature名称:', f.properties.name);
-      });
 
       // 收集所有边界坐标（排除台湾）
       const allBorderCoordinates = [];
@@ -641,17 +790,14 @@ export default {
 
         // 排除台湾省
         if (borderName && borderName.includes('台湾')) {
-          console.log('排除台湾省');
           return;
         }
-
-        console.log('处理边界:', borderName);
 
         if (feature.geometry.type === "Polygon") {
           feature.geometry.coordinates.forEach((polygon) => {
             const coords = coordinatesToMercator(polygon);
             const normalized = normalizeCoordinates(coords, center);
-            console.log('添加Polygon边界，点数:', normalized.length);
+
             allBorderCoordinates.push(normalized);
           });
         } else if (feature.geometry.type === "MultiPolygon") {
@@ -659,14 +805,12 @@ export default {
             multi.forEach((polygon) => {
               const coords = coordinatesToMercator(polygon);
               const normalized = normalizeCoordinates(coords, center);
-              console.log('添加MultiPolygon边界，点数:', normalized.length);
+
               allBorderCoordinates.push(normalized);
             });
           });
         }
       });
-
-      console.log('收集到的边界数量:', allBorderCoordinates.length);
 
       // 为每个边界创建动画线条
       const borderLines = [];
@@ -740,13 +884,6 @@ export default {
 
       // 保存边界线数组到 scene.userData
       scene.userData.borderLines = borderLines;
-
-      // 调试信息
-      console.log('创建了边界线数量:', borderLines.length);
-      if (borderLines.length > 0) {
-        console.log('第一条边界线总点数:', borderLines[0].totalPoints);
-        console.log('第一条边界线显示点数:', borderLines[0].halfPoints);
-      }
     };
 
     // 添加事件监听器
@@ -797,19 +934,45 @@ export default {
 
           // 更新当前悬停的网格
           hoveredMesh = mesh;
+
+          // 创建3D文字标签
+          const provinceName = mesh.userData.name;
+          // 找到该省份的所有mesh，计算整体中心
+          const province = provinces.find(p => p.name === provinceName);
+          const provinceCenter = calculateProvinceCenter(province);
+          const baseHeight = 15000; // 地块顶面高度
+          create3DTextLabel(provinceName, provinceCenter, baseHeight);
         }
       } else {
-        // 鼠标没有悬停在任何网格上，恢复颜色
+        // 鼠标没有悬停在任何网格上，恢复颜色并移除文字标签
         restoreMeshColor();
+
+        // 移除3D文字标签（Troika Text对象）
+        if (currentTextLabel) {
+          scene.remove(currentTextLabel);
+          if (currentTextLabel.dispose) {
+            currentTextLabel.dispose();
+          }
+          currentTextLabel = null;
+        }
       }
     };
 
     /**
      * 鼠标离开容器事件处理函数
-     * 恢复所有网格的原始颜色
+     * 恢复所有网格的原始颜色并移除文字标签
      */
     const onMouseLeave = () => {
       restoreMeshColor();
+
+      // 移除3D文字标签（Troika Text对象）
+      if (currentTextLabel) {
+        scene.remove(currentTextLabel);
+        if (currentTextLabel.dispose) {
+          currentTextLabel.dispose();
+        }
+        currentTextLabel = null;
+      }
     };
 
     /**
@@ -831,8 +994,8 @@ export default {
      * @param {THREE.Mesh} mesh - 要设置颜色的网格
      */
     const setMeshHoverColor = (mesh) => {
-      // 设置为橘色，保持原有透明度
-      mesh.material.color.setHex(0xFFA500);
+      // 设置为金黄色/橙黄色，与文字的黄色保持和谐
+      mesh.material.color.setHex(0xD4A017); // 金黄色，与文字的黄色形成和谐对比
     };
 
     /**
@@ -1024,7 +1187,7 @@ export default {
       if (scene.userData.borderLines) {
         scene.userData.borderLines.forEach((borderLine) => {
           // 每帧移动起始索引（控制动画速度）
-          borderLine.startIndex += 1; // 每帧前进2个点
+          borderLine.startIndex += 2; // 每帧前进2个点
 
           // 循环播放：当起始索引超出总点数时重置
           if (borderLine.startIndex >= borderLine.totalPoints) {
@@ -1057,6 +1220,23 @@ export default {
             borderLine.geometry.attributes.instanceEnd.needsUpdate = true;
           }
         });
+      }
+
+      // 更新3D文字标签的浮动动画
+      if (currentTextLabel && currentTextLabel.userData) {
+        // 更新浮动偏移量（使用正弦波实现上下浮动）
+        currentTextLabel.userData.floatOffset += LABEL_CONFIG.floatSpeed;
+
+        // 计算当前Y位置：基础高度 + 正弦波浮动（范围：0到floatRange）
+        const floatY = Math.sin(currentTextLabel.userData.floatOffset) * LABEL_CONFIG.floatRange;
+        currentTextLabel.position.y = currentTextLabel.userData.baseY + floatY;
+
+        // 文字始终面向相机（Billboard效果 - 广告牌效果）
+        if (camera) {
+          // 直接复制相机的旋转四元数，实现完美的Billboard效果
+          // 这样文字会始终正面朝向相机，无论相机从哪个角度观察
+          currentTextLabel.quaternion.copy(camera.quaternion);
+        }
       }
 
       // 更新角度显示（用于调试）
@@ -1096,6 +1276,15 @@ export default {
       hoveredMesh = null;
       originalColors.clear();
 
+      // 清理3D文字标签（Troika Text对象）
+      if (currentTextLabel) {
+        scene.remove(currentTextLabel);
+        if (currentTextLabel.dispose) {
+          currentTextLabel.dispose();
+        }
+        currentTextLabel = null;
+      }
+
       if (renderer) {
         renderer.dispose();
       }
@@ -1106,6 +1295,7 @@ export default {
 
     onMounted(() => {
       initScene();
+      loadChineseTypeface(); // 预加载中文typeface.json（若存在）
     });
 
     onUnmounted(() => {
