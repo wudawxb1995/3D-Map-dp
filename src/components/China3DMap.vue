@@ -62,6 +62,12 @@ export default {
     let provinces = [];
     const animationId = ref(null);
 
+    // 射线拾取相关变量
+    let raycaster = null;
+    let mouse = new THREE.Vector2();
+    let hoveredMesh = null; // 当前悬停的网格
+    const originalColors = new Map(); // 保存原始颜色
+
     // 旋转角度显示（响应式数据）
     const rotationAngles = ref({
       x: 0,
@@ -247,9 +253,8 @@ export default {
         scene.add(ringPlane);
       });
 
-      // 禁用鼠标悬停效果 - 不再需要射线检测器
-      // raycaster = new THREE.Raycaster();
-      // mouse = new THREE.Vector2();
+      // 初始化射线检测器
+      raycaster = new THREE.Raycaster();
 
       // 处理数据
       processGeoData();
@@ -746,37 +751,102 @@ export default {
 
     // 添加事件监听器
     const addEventListeners = () => {
-      // 禁用鼠标悬停效果，不再监听鼠标移动和离开事件
-      // container.value.addEventListener("mousemove", onMouseMove);
-      // container.value.addEventListener("mouseleave", onMouseLeave);
+      // 监听鼠标移动事件
+      container.value.addEventListener("mousemove", onMouseMove);
+      container.value.addEventListener("mouseleave", onMouseLeave);
       window.addEventListener("resize", onWindowResize);
     };
 
-    // 禁用鼠标悬停效果 - 注释掉相关函数
-    // const onMouseMove = (event) => {
-    //   const rect = container.value.getBoundingClientRect();
-    //   mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-    //   mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    /**
+     * 鼠标移动事件处理函数
+     * 实现射线拾取，检测鼠标悬停的区市表面
+     */
+    const onMouseMove = (event) => {
+      // 计算鼠标在容器中的相对位置
+      const rect = container.value.getBoundingClientRect();
 
-    //   raycaster.setFromCamera(mouse, camera);
+      // 将鼠标屏幕坐标转换为标准化设备坐标（NDC）
+      // NDC范围：x和y都在[-1, 1]之间
+      mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
-    //   const allMeshes = provinces.flatMap((p) => p.meshes);
-    //   const intersects = raycaster.intersectObjects(allMeshes);
+      // 使用射线检测器从相机位置发射射线
+      raycaster.setFromCamera(mouse, camera);
 
-    //   // 查找当前悬停的省份
-    //   let currentProvince = null;
-    //   if (intersects.length > 0) {
-    //     const mesh = intersects[0].object;
-    //     currentProvince = provinces.find((p) => p.meshes.includes(mesh));
-    //   }
+      // 获取所有省份的顶面网格
+      const allMeshes = provinces.flatMap((p) => p.meshes);
 
-    //   // 使用防抖处理悬停变化
-    //   debouncedHover(currentProvince);
-    // };
+      // 检测射线与网格的交点
+      const intersects = raycaster.intersectObjects(allMeshes);
 
-    // const onMouseLeave = () => {
-    //   debouncedHover(null);
-    // };
+      // 处理悬停效果
+      if (intersects.length > 0) {
+        // 获取第一个相交的网格（最近的）
+        const mesh = intersects[0].object;
+
+        // 如果悬停的是新的网格
+        if (hoveredMesh !== mesh) {
+          // 恢复之前悬停网格的颜色
+          restoreMeshColor();
+
+          // 保存新网格的原始颜色
+          saveOriginalColor(mesh);
+
+          // 设置新网格为橘色
+          setMeshHoverColor(mesh);
+
+          // 更新当前悬停的网格
+          hoveredMesh = mesh;
+        }
+      } else {
+        // 鼠标没有悬停在任何网格上，恢复颜色
+        restoreMeshColor();
+      }
+    };
+
+    /**
+     * 鼠标离开容器事件处理函数
+     * 恢复所有网格的原始颜色
+     */
+    const onMouseLeave = () => {
+      restoreMeshColor();
+    };
+
+    /**
+     * 保存网格的原始颜色
+     * @param {THREE.Mesh} mesh - 要保存颜色的网格
+     */
+    const saveOriginalColor = (mesh) => {
+      if (!originalColors.has(mesh)) {
+        // 保存原始颜色和透明度
+        originalColors.set(mesh, {
+          color: mesh.material.color.getHex(),
+          opacity: mesh.material.opacity
+        });
+      }
+    };
+
+    /**
+     * 设置网格的悬停颜色（橘色）
+     * @param {THREE.Mesh} mesh - 要设置颜色的网格
+     */
+    const setMeshHoverColor = (mesh) => {
+      // 设置为橘色，保持原有透明度
+      mesh.material.color.setHex(0xFFA500);
+    };
+
+    /**
+     * 恢复网格的原始颜色
+     */
+    const restoreMeshColor = () => {
+      if (hoveredMesh && originalColors.has(hoveredMesh)) {
+        const original = originalColors.get(hoveredMesh);
+        // 恢复原始颜色，保持透明度不变
+        hoveredMesh.material.color.setHex(original.color);
+        // 清除悬停状态
+        hoveredMesh = null;
+      }
+    };
 
     // 窗口大小调整
     const onWindowResize = () => {
@@ -1015,10 +1085,16 @@ export default {
         controls.dispose();
       }
 
-      // 禁用鼠标悬停效果，不再移除相关事件监听器
-      // container.value.removeEventListener("mousemove", onMouseMove);
-      // container.value.removeEventListener("mouseleave", onMouseLeave);
+      // 移除事件监听器
+      if (container.value) {
+        container.value.removeEventListener("mousemove", onMouseMove);
+        container.value.removeEventListener("mouseleave", onMouseLeave);
+      }
       window.removeEventListener("resize", onWindowResize);
+
+      // 清理射线拾取相关资源
+      hoveredMesh = null;
+      originalColors.clear();
 
       if (renderer) {
         renderer.dispose();
