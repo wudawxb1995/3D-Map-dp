@@ -450,9 +450,13 @@ export default {
       const scale =
         200000 / Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
 
+      // 加载中国地图纹理（整体贴图）
+      const textureLoader = new THREE.TextureLoader();
+      const chinaTexture = textureLoader.load('/src/assets/image/home/quanGuo.png');
+
       // 1. 创建省份顶面（使用 chinaData）
       chinaData.features.forEach((feature) => {
-        createProvinceTopMesh(feature, center, scale);
+        createProvinceTopMesh(feature, center, scale, bounds, chinaTexture);
       });
 
       // 2. 创建国界侧面（使用 chinaBorderData）
@@ -468,7 +472,7 @@ export default {
      * 创建省份顶面网格（使用 chinaData）
      * 只渲染顶面，不渲染侧面
      */
-    const createProvinceTopMesh = (feature, center, scale) => {
+    const createProvinceTopMesh = (feature, center, scale, bounds, chinaTexture) => {
       const provinceGroup = new THREE.Group();
       const provinceName = feature.properties.name;
       const actualExtrudeHeight = 15000; // 统一高度
@@ -495,22 +499,44 @@ export default {
         });
       }
 
+      // 计算中国地图的整体尺寸（用于UV映射）
+      const mapWidth = (bounds.maxX - bounds.minX) * scale;
+      const mapHeight = (bounds.maxY - bounds.minY) * scale;
+
       // 创建3D体块 - 只渲染顶面（不渲染底面和侧面）
       // 顶面位置在侧面之上
       geometries.forEach((geometry) => {
-        // 创建顶面材质（可见）
+        // 使用 createShapeGeometry 创建平面几何体
+        // 这个函数返回的是 THREE.Shape，需要转换为 ShapeGeometry
+        const shapeGeometry = new THREE.ShapeGeometry(geometry);
+
+        // 计算UV坐标映射 - 将每个省份映射到纹理的对应位置
+        const positions = shapeGeometry.attributes.position;
+        const uvs = new Float32Array(positions.count * 2);
+
+        for (let i = 0; i < positions.count; i++) {
+          const x = positions.getX(i);
+          const y = positions.getY(i);
+
+          // 将顶点坐标归一化到 [0, 1] 范围
+          // 注意：需要将坐标从中心对齐转换为左下角对齐
+          uvs[i * 2] = (x + mapWidth / 2) / mapWidth; // U坐标
+          uvs[i * 2 + 1] = (y + mapHeight / 2) / mapHeight; // V坐标
+        }
+
+        // 设置UV属性
+        shapeGeometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+
+        // 创建顶面材质（带纹理贴图，使用UV映射）
         const topMaterial = new THREE.MeshPhongMaterial({
-          color: 0x3370ff, // rgb(51, 112, 255)
+          map: chinaTexture, // 使用纹理贴图
+          color: 0xffffff, // 白色以显示原始纹理颜色
           transparent: true,
-          opacity: 0.5,
+          opacity: 1, // 可调整透明度
           depthWrite: true,
           depthTest: true,
           side: THREE.DoubleSide, // 双面渲染
         });
-
-        // 使用 createShapeGeometry 创建平面几何体
-        // 这个函数返回的是 THREE.Shape，需要转换为 ShapeGeometry
-        const shapeGeometry = new THREE.ShapeGeometry(geometry);
 
         // 创建网格
         const mesh = new THREE.Mesh(shapeGeometry, topMaterial);
