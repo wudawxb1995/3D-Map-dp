@@ -1,42 +1,5 @@
 <template>
-  <div ref="container" class="china-3d-container">
-    <!-- 右上角显示旋转角度和坐标轴说明 -->
-    <div class="rotation-info">
-      <div class="axis-legend">
-        <div class="legend-title">坐标轴说明</div>
-        <div class="legend-item">
-          <span class="axis-color x-axis"></span>
-          <span class="axis-name">X轴（红色）</span>
-        </div>
-        <div class="legend-item">
-          <span class="axis-color y-axis"></span>
-          <span class="axis-name">Y轴（绿色）</span>
-        </div>
-        <div class="legend-item">
-          <span class="axis-color z-axis"></span>
-          <span class="axis-name">Z轴（蓝色）</span>
-        </div>
-      </div>
-
-      <div class="divider"></div>
-
-      <div class="rotation-angles">
-        <div class="angles-title">旋转角度</div>
-        <div class="rotation-item">
-          <span class="label">X轴旋转:</span>
-          <span class="value">{{ rotationAngles.x }}°</span>
-        </div>
-        <div class="rotation-item">
-          <span class="label">Y轴旋转:</span>
-          <span class="value">{{ rotationAngles.y }}°</span>
-        </div>
-        <div class="rotation-item">
-          <span class="label">Z轴旋转:</span>
-          <span class="value">{{ rotationAngles.z }}°</span>
-        </div>
-      </div>
-    </div>
-  </div>
+  <div ref="container" class="china-3d-container"></div>
 </template>
 
 <script>
@@ -53,20 +16,28 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { Line2 } from "three/examples/jsm/lines/Line2.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
-import { FontLoader } from 'three/examples/jsm/loaders/FontLoader.js';
-import { TextGeometry } from 'three/examples/jsm/geometries/TextGeometry.js';
+import { FontLoader } from "three/examples/jsm/loaders/FontLoader.js";
+import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
+import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { FXAAShader } from "three/examples/jsm/shaders/FXAAShader.js";
+import * as dat from "dat.gui";
 
-
-import FZLISHU_TYPEFACE_URL from '@/assets/fonts/FZLiShu-S01_Regular.json?url';
-import FZWEIBEI_TYPEFACE_URL from '@/assets/fonts/FZWeiBei-S03_Regular.json?url';
+import FZLISHU_TYPEFACE_URL from "@/assets/fonts/FZLiShu-S01_Regular.json?url";
+import FZWEIBEI_TYPEFACE_URL from "@/assets/fonts/FZWeiBei-S03_Regular.json?url";
 
 export default {
   name: "China3DMap",
   setup() {
     const container = ref(null);
-    let scene, camera, renderer;
+    let scene, camera, renderer, composer;
     let provinces = [];
     const animationId = ref(null);
+    let gui = null; // dat.GUI实例
+    let bloomPass = null; // Bloom通道引用
 
     // 射线拾取相关变量
     let raycaster = null;
@@ -79,7 +50,7 @@ export default {
 
     let cnFont = null; // 中文 typeface.json 字体对象（TextGeometry 使用）
     // 最近一次标签状态（用于在中文字体JSON加载后自动创建文字）
-    let lastLabelState = { text: '', position: null, baseHeight: 0 };
+    let lastLabelState = { text: "", position: null, baseHeight: 0 };
 
     // 本地 assets 下提供的中文 typeface.json 候选列表（存在其一即可）
     const CN_TYPEFACE_CANDIDATES = [
@@ -93,19 +64,12 @@ export default {
       floatSpeed: 0.001, // 浮动速度
       fontSize: 3000, // 字体大小
       textColor: 0xffff00, // 文字颜色（金黄色）
-      outlineColor: 0xFFD700, // 边缘颜色（金黄色）
+      outlineColor: 0xffd700, // 边缘颜色（金黄色）
       textDepth: 500, // 文字厚度 - 加深厚度
       bevelEnabled: true, // 启用斜角
       bevelThickness: 50, // 斜角厚度
       bevelSize: 30, // 斜角大小
     };
-
-    // 旋转角度显示（响应式数据）
-    const rotationAngles = ref({
-      x: 0,
-      y: 0,
-      z: 0,
-    });
 
     // 初始化Three.js场景
     const initScene = () => {
@@ -145,6 +109,33 @@ export default {
       renderer.sortObjects = true; // 启用对象排序
 
       container.value.appendChild(renderer.domElement);
+
+      // 初始化后处理效果
+      composer = new EffectComposer(renderer);
+
+      // 添加渲染通道
+      const renderPass = new RenderPass(scene, camera);
+      composer.addPass(renderPass);
+
+      // 添加UnrealBloom通道（针对3D文字和边缘流线）- 降低强度避免过亮
+      bloomPass = new UnrealBloomPass(
+        new THREE.Vector2(width, height), // 降低分辨率提升性能
+        // new THREE.Vector2(width * 0.5, height * 0.5), // 降低分辨率提升性能
+        0.5, // 强度（从1.5降低到0.6）
+        0.3, // 半径（从0.4降低到0.3）
+        0.9 // 阈值（从0.85提高到0.9，减少发光对象）
+      );
+      composer.addPass(bloomPass);
+
+      // 添加FXAA抗锯齿通道
+      const fxaaPass = new ShaderPass(FXAAShader);
+      fxaaPass.material.uniforms["resolution"].value.x = 1 / width;
+      fxaaPass.material.uniforms["resolution"].value.y = 1 / height;
+      composer.addPass(fxaaPass);
+
+      // 添加输出通道
+      const outputPass = new OutputPass();
+      composer.addPass(outputPass);
 
       // 添加光源 - 简化光源，防止闪烁
       // 添加光源 - 增强光照以显示颜色
@@ -240,12 +231,9 @@ export default {
       animate();
     };
 
-
-
     /**
      * 加载字体
      */
-
 
     /**
      * 创建3D文字标签（TextGeometry 挤出中文）
@@ -265,10 +253,10 @@ export default {
           // 普通Mesh/Group
           if (currentTextLabel.geometry) currentTextLabel.geometry.dispose();
           if (currentTextLabel.material) {
-            if (Array.isArray(currentTextLabel.material)) currentTextLabel.material.forEach(m=>m.dispose());
+            if (Array.isArray(currentTextLabel.material))
+              currentTextLabel.material.forEach((m) => m.dispose());
             else currentTextLabel.material.dispose();
           }
-
         }
         currentTextLabel = null;
       }
@@ -276,8 +264,8 @@ export default {
       // 记录最近一次标签状态，用于字体JSON加载后自动创建文字
       lastLabelState = {
         text,
-        position: (position && position.clone) ? position.clone() : position,
-        baseHeight
+        position: position && position.clone ? position.clone() : position,
+        baseHeight,
       };
 
       // 字体未就绪则等待 loadChineseTypeface 成功后再创建
@@ -287,53 +275,62 @@ export default {
 
       // 使用 TextGeometry 挤出中文
       const geometry = new TextGeometry(text, {
-            font: cnFont,
-            size: LABEL_CONFIG.fontSize,
-            height: LABEL_CONFIG.textDepth,
-            curveSegments: 12,
-            bevelEnabled: LABEL_CONFIG.bevelEnabled,
-            bevelThickness: LABEL_CONFIG.bevelThickness,
-            bevelSize: LABEL_CONFIG.bevelSize,
-            bevelSegments: 5
-          });
-          geometry.computeBoundingBox();
-          const centerOffset = -0.5 * (geometry.boundingBox.max.x - geometry.boundingBox.min.x);
+        font: cnFont,
+        size: LABEL_CONFIG.fontSize,
+        height: LABEL_CONFIG.textDepth,
+        curveSegments: 12,
+        bevelEnabled: LABEL_CONFIG.bevelEnabled,
+        bevelThickness: LABEL_CONFIG.bevelThickness,
+        bevelSize: LABEL_CONFIG.bevelSize,
+        bevelSegments: 5,
+      });
+      geometry.computeBoundingBox();
+      const centerOffset =
+        -0.5 * (geometry.boundingBox.max.x - geometry.boundingBox.min.x);
 
-          // 3D文字材质：确保始终显示在最上层
-          const materials = [
-            new THREE.MeshPhongMaterial({
-              color: LABEL_CONFIG.textColor,
-              flatShading: true,
-              side: THREE.DoubleSide,
-              transparent: true, // 启用透明以支持renderOrder排序
-              opacity: 1.0, // 完全不透明
-              emissive: LABEL_CONFIG.textColor, // 自发光颜色
-              emissiveIntensity: 0.5, // 自发光强度
-              depthTest: false, // 禁用深度测试，始终显示在最前面
-              depthWrite: false // 禁用深度写入，不被其他物体遮挡
-            }), // front/back
-            new THREE.MeshPhongMaterial({
-              color: LABEL_CONFIG.outlineColor,
-              transparent: true, // 启用透明以支持renderOrder排序
-              opacity: 1.0, // 完全不透明
-              emissive: LABEL_CONFIG.outlineColor, // 自发光颜色
-              emissiveIntensity: 0.5, // 自发光强度
-              depthTest: false, // 禁用深度测试，始终显示在最前面
-              depthWrite: false // 禁用深度写入，不被其他物体遮挡
-            }) // side
-          ];
+      // 3D文字材质：确保始终显示在最上层，并添加Bloom发光效果
+      const materials = [
+        new THREE.MeshPhongMaterial({
+          color: LABEL_CONFIG.textColor,
+          flatShading: true,
+          side: THREE.DoubleSide,
+          transparent: true, // 启用透明以支持renderOrder排序
+          opacity: 1.0, // 完全不透明
+          emissive: LABEL_CONFIG.textColor, // 自发光颜色（用于Bloom效果）
+          emissiveIntensity: 0.5, // 低自发光强度，减少辉光效果
+          depthTest: false, // 禁用深度测试，始终显示在最前面
+          depthWrite: false, // 禁用深度写入，不被其他物体遮挡
+        }), // front/back
+        new THREE.MeshPhongMaterial({
+          color: LABEL_CONFIG.outlineColor,
+          transparent: true, // 启用透明以支持renderOrder排序
+          opacity: 1.0, // 完全不透明
+          emissive: LABEL_CONFIG.outlineColor, // 自发光颜色（用于Bloom效果）
+          emissiveIntensity: 0, // 边缘不发光
+          depthTest: false, // 禁用深度测试，始终显示在最前面
+          depthWrite: false, // 禁用深度写入，不被其他物体遮挡
+        }), // side
+      ];
 
-          const textMesh = new THREE.Mesh(geometry, materials);
-          // 文字与顶面垂直：Y轴为高度方向，文字竖立在顶面上
-          textMesh.position.set(position.x + centerOffset, baseHeight + LABEL_CONFIG.floatHeight, position.z);
-          // 初始旋转设置为0，后续在动画循环中始终面向相机
-          textMesh.rotation.set(0, 0, 0);
-          // 设置渲染顺序为最高，确保3D文字始终显示在最上层
-          textMesh.renderOrder = 999;
-          textMesh.userData = { baseY: baseHeight + LABEL_CONFIG.floatHeight, floatOffset: 0, renderer: 'textgeometry' };
-          scene.add(textMesh);
-          currentTextLabel = textMesh;
-          return;
+      const textMesh = new THREE.Mesh(geometry, materials);
+      // 文字与顶面垂直：Y轴为高度方向，文字竖立在顶面上
+      textMesh.position.set(
+        position.x + centerOffset,
+        baseHeight + LABEL_CONFIG.floatHeight,
+        position.z
+      );
+      // 初始旋转设置为0，后续在动画循环中始终面向相机
+      textMesh.rotation.set(0, 0, 0);
+      // 设置渲染顺序为最高，确保3D文字始终显示在最上层
+      textMesh.renderOrder = 999;
+      textMesh.userData = {
+        baseY: baseHeight + LABEL_CONFIG.floatHeight,
+        floatOffset: 0,
+        renderer: "textgeometry",
+      };
+      scene.add(textMesh);
+      currentTextLabel = textMesh;
+      return;
     };
 
     /**
@@ -350,7 +347,7 @@ export default {
       let totalVertices = 0;
       const center = new THREE.Vector3(0, 0, 0);
 
-      province.meshes.forEach(mesh => {
+      province.meshes.forEach((mesh) => {
         const geometry = mesh.geometry;
         const positionAttribute = geometry.attributes.position;
 
@@ -384,7 +381,6 @@ export default {
       return center;
     };
 
-
     /**
      * 预加载中文 typeface.json（顺序尝试 public/fonts 下的候选文件）
      * 成功后赋值 cnFont，用于 TextGeometry 挤出中文
@@ -394,7 +390,7 @@ export default {
       let idx = 0;
       const tryLoad = () => {
         if (idx >= CN_TYPEFACE_CANDIDATES.length) {
-          console.warn('⚠️ 未找到可用的中文 typeface.json');
+          console.warn("⚠️ 未找到可用的中文 typeface.json");
           return;
         }
         const url = CN_TYPEFACE_CANDIDATES[idx];
@@ -402,14 +398,18 @@ export default {
           url,
           (loaded) => {
             cnFont = loaded;
-  
+
             // 字体加载完毕后，如有上一次悬停记录则创建
             try {
               if (lastLabelState?.text && lastLabelState.position) {
-                create3DTextLabel(lastLabelState.text, lastLabelState.position, lastLabelState.baseHeight);
+                create3DTextLabel(
+                  lastLabelState.text,
+                  lastLabelState.position,
+                  lastLabelState.baseHeight
+                );
               }
             } catch (e) {
-              console.warn('⚠️ 切换为TextGeometry失败（加载后重建）:', e);
+              console.warn("⚠️ 切换为TextGeometry失败（加载后重建）:", e);
             }
           },
           undefined,
@@ -718,6 +718,9 @@ export default {
               // 光带效果：接近0时亮，接近1时暗
               float alpha = 1.0 - bands;
 
+              // 增强发光效果以触发Bloom后处理 - 提高亮度以产生强烈辉光
+              // vec3 glowColor = color1 * (1.5 + alpha * 2.0); // 大幅增强亮度
+
               gl_FragColor = vec4(color1, alpha);
             }`,
         });
@@ -781,7 +784,6 @@ export default {
     const createChinaBorderLineAnimation = (center, scale) => {
       const actualExtrudeHeight = 15000; // 与省份高度一致
 
-
       // 收集所有边界坐标（排除台湾）
       const allBorderCoordinates = [];
 
@@ -789,7 +791,7 @@ export default {
         const borderName = feature.properties.name;
 
         // 排除台湾省
-        if (borderName && borderName.includes('台湾')) {
+        if (borderName && borderName.includes("台湾")) {
           return;
         }
 
@@ -837,12 +839,12 @@ export default {
         const initialPositions = fullPositions.slice(0, halfPoints * 3);
         lineGeometry.setPositions(initialPositions);
 
-        // 创建 LineMaterial
+        // 创建 LineMaterial - 高亮度以产生强烈辉光效果
         const lineMaterial = new LineMaterial({
-          color: 0xffffFF, // 使用正确的颜色
-          linewidth: 4, // 4px
+          color: 0xffffff, // 纯白色，最高亮度
+          linewidth: 4, // 恢复线宽到4px
           transparent: true,
-          opacity: 1, // 透明度1
+          opacity: 1, // 完全不透明
           depthWrite: false,
           depthTest: false,
         });
@@ -938,7 +940,7 @@ export default {
           // 创建3D文字标签
           const provinceName = mesh.userData.name;
           // 找到该省份的所有mesh，计算整体中心
-          const province = provinces.find(p => p.name === provinceName);
+          const province = provinces.find((p) => p.name === provinceName);
           const provinceCenter = calculateProvinceCenter(province);
           const baseHeight = 15000; // 地块顶面高度
           create3DTextLabel(provinceName, provinceCenter, baseHeight);
@@ -984,7 +986,7 @@ export default {
         // 保存原始颜色和透明度
         originalColors.set(mesh, {
           color: mesh.material.color.getHex(),
-          opacity: mesh.material.opacity
+          opacity: mesh.material.opacity,
         });
       }
     };
@@ -995,7 +997,7 @@ export default {
      */
     const setMeshHoverColor = (mesh) => {
       // 设置为金黄色/橙黄色，与文字的黄色保持和谐
-      mesh.material.color.setHex(0xD4A017); // 金黄色，与文字的黄色形成和谐对比
+      mesh.material.color.setHex(0xd4a017); // 金黄色，与文字的黄色形成和谐对比
     };
 
     /**
@@ -1019,6 +1021,27 @@ export default {
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
       renderer.setSize(width, height);
+
+      // 更新后处理composer尺寸（使用降低的分辨率提升性能）
+      composer.setSize(width, height);
+
+      // 更新Bloom Pass分辨率（降低分辨率提升性能）
+      const bloomPass = composer.passes.find(
+        (pass) => pass instanceof UnrealBloomPass
+      );
+      if (bloomPass) {
+        bloomPass.resolution.set(width, height);
+        // bloomPass.resolution.set(width * 0.5, height * 0.5);
+      }
+
+      // 更新FXAA分辨率
+      const fxaaPass = composer.passes.find(
+        (pass) => pass.material && pass.material.uniforms.resolution
+      );
+      if (fxaaPass) {
+        fxaaPass.material.uniforms["resolution"].value.x = 1 / width;
+        fxaaPass.material.uniforms["resolution"].value.y = 1 / height;
+      }
 
       // 更新所有 LineMaterial 的分辨率
       if (scene.userData.lineMaterials) {
@@ -1181,8 +1204,6 @@ export default {
         });
       }
 
-
-
       // 更新中国边界线动画 - 滚动显示一半的点（头尾连贯）
       if (scene.userData.borderLines) {
         scene.userData.borderLines.forEach((borderLine) => {
@@ -1199,7 +1220,8 @@ export default {
 
           for (let i = 0; i < borderLine.halfPoints; i++) {
             // 计算当前点的索引（循环取模）
-            const pointIndex = (borderLine.startIndex + i) % borderLine.totalPoints;
+            const pointIndex =
+              (borderLine.startIndex + i) % borderLine.totalPoints;
             const posIndex = pointIndex * 3;
 
             // 添加该点的x, y, z坐标
@@ -1228,7 +1250,9 @@ export default {
         currentTextLabel.userData.floatOffset += LABEL_CONFIG.floatSpeed;
 
         // 计算当前Y位置：基础高度 + 正弦波浮动（范围：0到floatRange）
-        const floatY = Math.sin(currentTextLabel.userData.floatOffset) * LABEL_CONFIG.floatRange;
+        const floatY =
+          Math.sin(currentTextLabel.userData.floatOffset) *
+          LABEL_CONFIG.floatRange;
         currentTextLabel.position.y = currentTextLabel.userData.baseY + floatY;
 
         // 文字始终面向相机（Billboard效果 - 广告牌效果）
@@ -1240,19 +1264,8 @@ export default {
       }
 
       // 更新角度显示（用于调试）
-      if (controls) {
-        // 显示OrbitControls的极角和方位角
-        const polarAngle = controls.getPolarAngle();
-        const azimuthalAngle = controls.getAzimuthalAngle();
-
-        rotationAngles.value.x =
-          Math.round(((polarAngle * 180) / Math.PI) * 100) / 100; // 极角（俯仰）
-        rotationAngles.value.y =
-          Math.round(((azimuthalAngle * 180) / Math.PI) * 100) / 100; // 方位角（水平旋转）
-        rotationAngles.value.z = 0;
-      }
-
-      renderer.render(scene, camera);
+      // 使用后处理渲染
+      composer.render();
     };
 
     // 清理资源
@@ -1291,11 +1304,80 @@ export default {
       if (container.value && renderer) {
         container.value.removeChild(renderer.domElement);
       }
+
+      // 清理GUI
+      if (gui) {
+        gui.destroy();
+        gui = null;
+      }
+    };
+
+    /**
+     * 初始化GUI控制面板
+     */
+    const initGUI = () => {
+      // 创建GUI实例
+      gui = new dat.GUI({ autoPlace: false });
+      gui.domElement.style.position = "absolute";
+      gui.domElement.style.left = "20px";
+      gui.domElement.style.bottom = "20px";
+      gui.domElement.style.zIndex = "1000";
+      container.value.appendChild(gui.domElement);
+
+      // Bloom效果参数
+      const bloomParams = {
+        enabled: true,
+        strength: 0.5,
+        radius: 0.3,
+        threshold: 0.9,
+      };
+
+      // 添加Bloom控制文件夹
+      const bloomFolder = gui.addFolder("Bloom效果");
+
+      bloomFolder
+        .add(bloomParams, "enabled")
+        .name("启用Bloom")
+        .onChange((value) => {
+          if (bloomPass) {
+            bloomPass.enabled = value;
+          }
+        });
+
+      bloomFolder
+        .add(bloomParams, "strength", 0, 3, 0.1)
+        .name("强度")
+        .onChange((value) => {
+          if (bloomPass) {
+            bloomPass.strength = value;
+          }
+        });
+
+      bloomFolder
+        .add(bloomParams, "radius", 0, 1, 0.05)
+        .name("半径")
+        .onChange((value) => {
+          if (bloomPass) {
+            bloomPass.radius = value;
+          }
+        });
+
+      bloomFolder
+        .add(bloomParams, "threshold", 0, 1, 0.05)
+        .name("阈值")
+        .onChange((value) => {
+          if (bloomPass) {
+            bloomPass.threshold = value;
+          }
+        });
+
+      bloomFolder.open();
     };
 
     onMounted(() => {
       initScene();
       loadChineseTypeface(); // 预加载中文typeface.json（若存在）
+      initGUI(); // 初始化GUI控制面板
     });
 
     onUnmounted(() => {
@@ -1304,7 +1386,6 @@ export default {
 
     return {
       container,
-      rotationAngles,
     };
   },
 };
@@ -1317,117 +1398,5 @@ export default {
   position: relative;
   overflow: hidden;
   background: radial-gradient(circle at center, #1a1a2e 0%, #0a0a0a 100%);
-}
-
-/* 右上角信息面板 */
-.rotation-info {
-  position: absolute;
-  top: 20px;
-  right: 20px;
-  background: rgba(0, 0, 0, 0.8);
-  padding: 20px;
-  border-radius: 10px;
-  color: #fff;
-  font-family: "Courier New", monospace;
-  font-size: 14px;
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.15);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
-  z-index: 1000;
-  min-width: 220px;
-}
-
-/* 坐标轴图例 */
-.axis-legend {
-  margin-bottom: 15px;
-}
-
-.legend-title {
-  font-size: 15px;
-  font-weight: bold;
-  color: #fff;
-  margin-bottom: 10px;
-  text-align: center;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-  padding-bottom: 8px;
-}
-
-.legend-item {
-  display: flex;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-.legend-item:last-child {
-  margin-bottom: 0;
-}
-
-.axis-color {
-  width: 30px;
-  height: 4px;
-  border-radius: 2px;
-  margin-right: 10px;
-  display: inline-block;
-}
-
-.axis-color.x-axis {
-  background-color: #ff0000; /* 红色 - X轴 */
-}
-
-.axis-color.y-axis {
-  background-color: #00ff00; /* 绿色 - Y轴 */
-}
-
-.axis-color.z-axis {
-  background-color: #0000ff; /* 蓝色 - Z轴 */
-}
-
-.axis-name {
-  color: #ccc;
-  font-size: 13px;
-}
-
-/* 分割线 */
-.divider {
-  height: 1px;
-  background: rgba(255, 255, 255, 0.2);
-  margin: 15px 0;
-}
-
-/* 旋转角度标题 */
-.angles-title {
-  font-size: 15px;
-  font-weight: bold;
-  color: #fff;
-  margin-bottom: 10px;
-  text-align: center;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-  padding-bottom: 8px;
-}
-
-.rotation-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-.rotation-item:last-child {
-  margin-bottom: 0;
-}
-
-.rotation-item .label {
-  color: #888;
-  margin-right: 15px;
-  font-weight: 500;
-  font-size: 13px;
-}
-
-.rotation-item .value {
-  color: #00ff88;
-  font-weight: bold;
-  min-width: 80px;
-  text-align: right;
-  font-size: 16px;
 }
 </style>
