@@ -599,7 +599,8 @@ export default {
         line.rotation.x = -Math.PI / 2;
 
         // 设置位置：将边界线放置在顶面的Y坐标上（稍微抬高避免z-fighting）
-        line.position.y = actualExtrudeHeight + 10;
+        const originalY = actualExtrudeHeight + 10;
+        line.position.y = originalY;
 
         // 设置渲染顺序，确保边界线在顶面之上
         line.renderOrder = 3;
@@ -610,6 +611,7 @@ export default {
           isProvinceBorder: true,
           originalColor: 0x70b2bd,
           originalLinewidth: 2.2,
+          originalY: originalY, // 保存原始Y轴位置
         };
 
         // 保存 LineMaterial 引用，用于窗口调整时更新分辨率
@@ -1024,9 +1026,13 @@ export default {
           // 找到该省份的所有边界线
           province.group.children.forEach((child) => {
             if (child.userData.isProvinceBorder) {
-              // 设置hover样式：加粗到6，颜色改成#94e7f5
+              // 设置hover样式：加粗到4，颜色改成#94e7f5
               child.material.color.setHex(0x94e7f5);
-              child.material.linewidth = 3.3;
+              child.material.linewidth = 4;
+              // 提升渲染顺序，确保不被其他边界线压盖
+              child.renderOrder = 10;
+              // 稍微抬高Y轴位置，避免z-fighting
+              child.position.y = child.userData.originalY + 20;
             }
           });
         }
@@ -1046,6 +1052,10 @@ export default {
                 // 恢复原始样式
                 child.material.color.setHex(child.userData.originalColor);
                 child.material.linewidth = child.userData.originalLinewidth;
+                // 恢复原始渲染顺序
+                child.renderOrder = 3;
+                // 恢复原始Y轴位置
+                child.position.y = child.userData.originalY;
               }
             });
           }
