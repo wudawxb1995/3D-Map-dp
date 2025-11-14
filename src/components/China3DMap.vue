@@ -121,7 +121,7 @@ export default {
       bloomPass = new UnrealBloomPass(
         new THREE.Vector2(width, height), // 降低分辨率提升性能
         // new THREE.Vector2(width * 0.5, height * 0.5), // 降低分辨率提升性能
-        0.5, // 强度（从1.5降低到0.6）
+        0.6, // 强度（从1.5降低到0.6）
         0.3, // 半径（从0.4降低到0.3）
         0.9 // 阈值（从0.85提高到0.9，减少发光对象）
       );
@@ -1327,7 +1327,7 @@ export default {
       // Bloom效果参数
       const bloomParams = {
         enabled: true,
-        strength: 0.5,
+        strength: 0.6,
         radius: 0.3,
         threshold: 0.9,
       };
