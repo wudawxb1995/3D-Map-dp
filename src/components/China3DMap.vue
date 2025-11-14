@@ -43,7 +43,7 @@ export default {
     let raycaster = null;
     let mouse = new THREE.Vector2();
     let hoveredMesh = null; // 当前悬停的网格
-    const originalColors = new Map(); // 保存原始颜色
+    let hoveredProvinceName = null; // 当前悬停的省份名称
 
     // 3D文字标签相关变量
     let currentTextLabel = null; // 当前显示的3D文字标签
@@ -578,7 +578,7 @@ export default {
 
         // 使用 LineMaterial 创建支持线宽的材质
         const lineMaterial = new LineMaterial({
-          color: 0x118cbc, // #118cbc
+          color: 0x70b2bd, // #70b2bd
           linewidth: 2.2, // 线宽（单位：像素）
           transparent: true,
           opacity: 0.9,
@@ -603,6 +603,14 @@ export default {
 
         // 设置渲染顺序，确保边界线在顶面之上
         line.renderOrder = 3;
+
+        // 保存边界线引用到userData，用于hover效果
+        line.userData = {
+          provinceName: provinceName,
+          isProvinceBorder: true,
+          originalColor: 0x70b2bd,
+          originalLinewidth: 2.2,
+        };
 
         // 保存 LineMaterial 引用，用于窗口调整时更新分辨率
         if (!scene.userData.lineMaterials) {
@@ -705,7 +713,7 @@ export default {
           depthTest: false,
           uniforms: {
             time: { value: 0.0 },
-            num: { value: 3.0 }, // 光带数量
+            num: { value: 2.0 }, // 光带数量
             color1: { value: new THREE.Color("#00FFFF") },
           },
           vertexShader: `
@@ -735,8 +743,8 @@ export default {
 
               // 垂直流动光带：使用 vUv.y（垂直方向）
               // vUv.y: 0=底部，1=顶部
-              // time 增加时，光带从底部向顶部流动
-              float wave = fract(vUv.y - time);
+              // time 增加时，光带从顶部向底部流动
+              float wave = fract(vUv.y + time);
 
               // 创建多条光带
               float bands = fract(wave * num);
@@ -951,20 +959,19 @@ export default {
 
         // 如果悬停的是新的网格
         if (hoveredMesh !== mesh) {
-          // 恢复之前悬停网格的颜色
-          restoreMeshColor();
-
-          // 保存新网格的原始颜色
-          saveOriginalColor(mesh);
-
-          // 设置新网格为橘色
-          setMeshHoverColor(mesh);
+          // 恢复之前悬停省份的边界线样式
+          restoreBorderLineStyle();
 
           // 更新当前悬停的网格
           hoveredMesh = mesh;
 
           // 创建3D文字标签
           const provinceName = mesh.userData.name;
+          hoveredProvinceName = provinceName;
+
+          // 设置当前省份的边界线高亮
+          setBorderLineHoverStyle(provinceName);
+
           // 找到该省份的所有mesh，计算整体中心
           const province = provinces.find((p) => p.name === provinceName);
           const provinceCenter = calculateProvinceCenter(province);
@@ -972,8 +979,10 @@ export default {
           create3DTextLabel(provinceName, provinceCenter, baseHeight);
         }
       } else {
-        // 鼠标没有悬停在任何网格上，恢复颜色并移除文字标签
-        restoreMeshColor();
+        // 鼠标没有悬停在任何网格上，恢复边界线样式并移除文字标签
+        restoreBorderLineStyle();
+        hoveredMesh = null;
+        hoveredProvinceName = null;
 
         // 移除3D文字标签（Troika Text对象）
         if (currentTextLabel) {
@@ -991,7 +1000,9 @@ export default {
      * 恢复所有网格的原始颜色并移除文字标签
      */
     const onMouseLeave = () => {
-      restoreMeshColor();
+      restoreBorderLineStyle();
+      hoveredMesh = null;
+      hoveredProvinceName = null;
 
       // 移除3D文字标签（Troika Text对象）
       if (currentTextLabel) {
@@ -1004,38 +1015,41 @@ export default {
     };
 
     /**
-     * 保存网格的原始颜色
-     * @param {THREE.Mesh} mesh - 要保存颜色的网格
+     * 设置省份边界线的hover样式
+     * @param {string} provinceName - 省份名称
      */
-    const saveOriginalColor = (mesh) => {
-      if (!originalColors.has(mesh)) {
-        // 保存原始颜色和透明度
-        originalColors.set(mesh, {
-          color: mesh.material.color.getHex(),
-          opacity: mesh.material.opacity,
+    const setBorderLineHoverStyle = (provinceName) => {
+      provinces.forEach((province) => {
+        if (province.name === provinceName) {
+          // 找到该省份的所有边界线
+          province.group.children.forEach((child) => {
+            if (child.userData.isProvinceBorder) {
+              // 设置hover样式：加粗到6，颜色改成#94e7f5
+              child.material.color.setHex(0x94e7f5);
+              child.material.linewidth = 3.3;
+            }
+          });
+        }
+      });
+    };
+
+    /**
+     * 恢复省份边界线的原始样式
+     */
+    const restoreBorderLineStyle = () => {
+      if (hoveredProvinceName) {
+        provinces.forEach((province) => {
+          if (province.name === hoveredProvinceName) {
+            // 找到该省份的所有边界线
+            province.group.children.forEach((child) => {
+              if (child.userData.isProvinceBorder) {
+                // 恢复原始样式
+                child.material.color.setHex(child.userData.originalColor);
+                child.material.linewidth = child.userData.originalLinewidth;
+              }
+            });
+          }
         });
-      }
-    };
-
-    /**
-     * 设置网格的悬停颜色（橘色）
-     * @param {THREE.Mesh} mesh - 要设置颜色的网格
-     */
-    const setMeshHoverColor = (mesh) => {
-      // 设置为金黄色/橙黄色，与文字的黄色保持和谐
-      mesh.material.color.setHex(0xd4a017); // 金黄色，与文字的黄色形成和谐对比
-    };
-
-    /**
-     * 恢复网格的原始颜色
-     */
-    const restoreMeshColor = () => {
-      if (hoveredMesh && originalColors.has(hoveredMesh)) {
-        const original = originalColors.get(hoveredMesh);
-        // 恢复原始颜色，保持透明度不变
-        hoveredMesh.material.color.setHex(original.color);
-        // 清除悬停状态
-        hoveredMesh = null;
       }
     };
 
@@ -1223,7 +1237,7 @@ export default {
             borderGroup.userData.materials.forEach((material) => {
               if (material.uniforms && material.uniforms.time) {
                 // 更新 time uniform，持续增加（降低速度）
-                material.uniforms.time.value += 0.002;
+                material.uniforms.time.value += 0.005;
               }
             });
           }
@@ -1313,7 +1327,7 @@ export default {
 
       // 清理射线拾取相关资源
       hoveredMesh = null;
-      originalColors.clear();
+      hoveredProvinceName = null;
 
       // 清理3D文字标签（Troika Text对象）
       if (currentTextLabel) {
