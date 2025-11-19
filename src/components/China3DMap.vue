@@ -21,9 +21,7 @@ import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
-import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
-import { FXAAShader } from "three/examples/jsm/shaders/FXAAShader.js";
 import * as dat from "dat.gui";
 
 import FZLISHU_TYPEFACE_URL from "@/assets/fonts/FZLiShu-S01_Regular.json?url";
@@ -52,6 +50,11 @@ export default {
     // 最近一次标签状态（用于在中文字体JSON加载后自动创建文字）
     let lastLabelState = { text: "", position: null, baseHeight: 0 };
 
+    // 省级图标和标签相关变量
+    let provinceIconsArray = []; // 存储所有省级图标Sprite
+    let provinceLabelsArray = []; // 存储所有省级标签
+    let provinceDataArray = []; // 存储省份数据（名称、位置等）
+
     // 本地 assets 下提供的中文 typeface.json 候选列表（存在其一即可）
     const CN_TYPEFACE_CANDIDATES = [
       FZLISHU_TYPEFACE_URL,
@@ -63,12 +66,26 @@ export default {
       floatRange: 20, // 浮动范围（10-30米）
       floatSpeed: 0.001, // 浮动速度
       fontSize: 3000, // 字体大小
-      textColor: 0xffff00, // 文字颜色（金黄色）
-      outlineColor: 0xffd700, // 边缘颜色（金黄色）
+      textColor: 0xffd700, // 文字颜色（亮金黄色）
+      outlineColor: 0xffaa00, // 边缘颜色（橙金色）
       textDepth: 500, // 文字厚度 - 加深厚度
       bevelEnabled: true, // 启用斜角
       bevelThickness: 50, // 斜角厚度
       bevelSize: 30, // 斜角大小
+      emissiveIntensity: 0.8, // 自发光强度（提高亮度）
+    };
+
+    // 省级图标配置
+    const ICON_CONFIG = {
+      iconSize: 3000, // 图标大小
+      iconHeight: 18000, // 图标基础高度
+      labelOffsetY: 8000, // 标签相对图标的Y轴偏移（从6000增加到8000，避免压盖icon）
+      labelFontSize: 8000, // 标签字体大小（缩小一半：从10000到5000）
+      labelPadding: 400, // 标签内边距（相应缩小）
+      labelBorderRadius: 200, // 标签圆角（相应缩小）
+      labelColor: 0x333333, // 标签文字颜色（深灰色）
+      labelBgColor: "#000000", // 标签背景颜色（深蓝色）
+      emissiveIntensity: 1.5, // 自发光强度（用于Bloom效果）
     };
 
     // 初始化Three.js场景
@@ -96,13 +113,14 @@ export default {
       // 设置相机控制目标点
       camera.target = new THREE.Vector3(0, 0, 0);
 
-      // 创建渲染器 - 确保不透明渲染
+      // 创建渲染器 - 启用原生抗锯齿，提升性能
       renderer = new THREE.WebGLRenderer({
-        antialias: false,
+        antialias: true, // 启用原生抗锯齿（比后处理FXAA性能更好）
         alpha: false, // 禁用alpha通道确保不透明背景
+        powerPreference: "high-performance", // 优先使用高性能GPU
       });
       renderer.setSize(width, height);
-      renderer.shadowMap.enabled = false;
+      renderer.shadowMap.enabled = false; // 禁用阴影以提升性能
       renderer.setClearColor(0x0a0a0a, 1); // 设置完全不透明的背景色
 
       // 启用深度测试，确保正确的遮挡关系
@@ -117,21 +135,20 @@ export default {
       const renderPass = new RenderPass(scene, camera);
       composer.addPass(renderPass);
 
-      // 添加UnrealBloom通道（针对3D文字和边缘流线）- 降低强度避免过亮
+      // 添加UnrealBloom通道（边缘流线强辉光效果）
       bloomPass = new UnrealBloomPass(
-        new THREE.Vector2(width, height), // 降低分辨率提升性能
-        // new THREE.Vector2(width * 0.5, height * 0.5), // 降低分辨率提升性能
-        0.6, // 强度（从1.5降低到0.6）
-        0.3, // 半径（从0.4降低到0.3）
-        0.9 // 阈值（从0.85提高到0.9，减少发光对象）
+        new THREE.Vector2(width * 0.5, height * 0.5), // 降低分辨率提升性能
+        0.5, // 强度（大幅提高到1.2，强烈辉光）
+        0.2, // 半径（提高到0.8，大范围辉光）
+        0.88 // 阈值（降低到0.88，让极亮青蓝色能触发强辉光）
       );
       composer.addPass(bloomPass);
 
-      // 添加FXAA抗锯齿通道
-      const fxaaPass = new ShaderPass(FXAAShader);
-      fxaaPass.material.uniforms["resolution"].value.x = 1 / width;
-      fxaaPass.material.uniforms["resolution"].value.y = 1 / height;
-      composer.addPass(fxaaPass);
+      // 移除FXAA抗锯齿通道以提升性能
+      // const fxaaPass = new ShaderPass(FXAAShader);
+      // fxaaPass.material.uniforms["resolution"].value.x = 1 / width;
+      // fxaaPass.material.uniforms["resolution"].value.y = 1 / height;
+      // composer.addPass(fxaaPass);
 
       // 添加输出通道
       const outputPass = new OutputPass();
@@ -288,7 +305,8 @@ export default {
       const centerOffset =
         -0.5 * (geometry.boundingBox.max.x - geometry.boundingBox.min.x);
 
-      // 3D文字材质：确保始终显示在最上层，并添加Bloom发光效果
+      // 3D文字材质：正常显示，无反光效果
+      // 3D文字材质：金黄色高亮效果
       const materials = [
         new THREE.MeshPhongMaterial({
           color: LABEL_CONFIG.textColor,
@@ -296,8 +314,8 @@ export default {
           side: THREE.DoubleSide,
           transparent: true, // 启用透明以支持renderOrder排序
           opacity: 1.0, // 完全不透明
-          emissive: LABEL_CONFIG.textColor, // 自发光颜色（用于Bloom效果）
-          emissiveIntensity: 0.5, // 低自发光强度，减少辉光效果
+          emissive: LABEL_CONFIG.textColor, // 自发光颜色（金黄色）
+          emissiveIntensity: LABEL_CONFIG.emissiveIntensity, // 自发光强度
           depthTest: false, // 禁用深度测试，始终显示在最前面
           depthWrite: false, // 禁用深度写入，不被其他物体遮挡
         }), // front/back
@@ -305,8 +323,8 @@ export default {
           color: LABEL_CONFIG.outlineColor,
           transparent: true, // 启用透明以支持renderOrder排序
           opacity: 1.0, // 完全不透明
-          emissive: LABEL_CONFIG.outlineColor, // 自发光颜色（用于Bloom效果）
-          emissiveIntensity: 0, // 边缘不发光
+          emissive: LABEL_CONFIG.outlineColor, // 自发光颜色（橙金色）
+          emissiveIntensity: LABEL_CONFIG.emissiveIntensity * 0.5, // 边缘稍弱的自发光
           depthTest: false, // 禁用深度测试，始终显示在最前面
           depthWrite: false, // 禁用深度写入，不被其他物体遮挡
         }), // side
@@ -382,6 +400,258 @@ export default {
     };
 
     /**
+     * 生成省级Mock数据
+     * @returns {number} 随机生成的数据值
+     */
+    const generateProvinceData = () => {
+      // 生成100-9999之间的随机整数
+      return Math.floor(Math.random() * 9900) + 100;
+    };
+
+    /**
+     * 计算省份几何中心点（从GeoJSON数据）
+     * @param {Object} geometry - GeoJSON几何对象
+     * @param {Object} center - 地图中心点
+     * @param {number} scale - 缩放因子
+     * @returns {THREE.Vector3} 中心点坐标
+     */
+    const calculateProvinceCenterFromGeometry = (geometry, center, scale) => {
+      let totalX = 0;
+      let totalY = 0;
+      let totalPoints = 0;
+
+      const processCoordinates = (coords) => {
+        coords.forEach((coord) => {
+          const mercatorCoords = coordinatesToMercator([coord]);
+          const normalized = normalizeCoordinates(mercatorCoords, center);
+          normalized.forEach((point) => {
+            totalX += point[0] * scale;
+            totalY += point[1] * scale;
+            totalPoints++;
+          });
+        });
+      };
+
+      if (geometry.type === "Polygon") {
+        geometry.coordinates.forEach((polygon) => {
+          processCoordinates(polygon);
+        });
+      } else if (geometry.type === "MultiPolygon") {
+        geometry.coordinates.forEach((multi) => {
+          multi.forEach((polygon) => {
+            processCoordinates(polygon);
+          });
+        });
+      }
+
+      if (totalPoints > 0) {
+        // 地图绕X轴旋转了-90度，所以坐标系统是：
+        // X轴：东西方向（不变）
+        // Y轴：高度方向（向上）
+        // Z轴：南北方向（原来的Y坐标取负值）
+        return new THREE.Vector3(
+          totalX / totalPoints, // X坐标（东西）
+          ICON_CONFIG.iconHeight, // Y坐标（高度）
+          -(totalY / totalPoints) // Z坐标（南北，取负值）
+        );
+      }
+
+      return new THREE.Vector3(0, ICON_CONFIG.iconHeight, 0);
+    };
+
+    /**
+     * 使用Sprite创建所有省级图标
+     * @param {Object} center - 地图中心点
+     * @param {number} scale - 缩放因子
+     */
+    const createProvinceIconsWithSprite = (center, scale) => {
+      // 收集所有省份的位置和数据
+      provinceDataArray = [];
+      provinceIconsArray = [];
+
+      chinaData.features.forEach((feature) => {
+        const provinceName = feature.properties.name;
+        const provinceData = generateProvinceData();
+        const provinceCenter = calculateProvinceCenterFromGeometry(
+          feature.geometry,
+          center,
+          scale
+        );
+
+        provinceDataArray.push({
+          name: provinceName,
+          data: provinceData,
+          position: provinceCenter,
+        });
+      });
+
+      // 加载图标纹理
+      const textureLoader = new THREE.TextureLoader();
+      const iconImageUrl = "/src/assets/image/home/icon.png";
+
+      textureLoader.load(
+        iconImageUrl,
+        (texture) => {
+          // 为每个省份创建一个Sprite
+          provinceDataArray.forEach((province) => {
+            // 创建Sprite材质 - 正常亮度，不参与Bloom
+            const spriteMaterial = new THREE.SpriteMaterial({
+              map: texture,
+              transparent: true,
+              opacity: 1,
+              depthTest: false,
+              depthWrite: false,
+              // 正常亮度，不触发Bloom
+              color: new THREE.Color(1, 1, 1), // 正常亮度
+              blending: THREE.NormalBlending, // 正常混合模式
+            });
+
+            // 创建Sprite
+            const sprite = new THREE.Sprite(spriteMaterial);
+            sprite.scale.set(ICON_CONFIG.iconSize, ICON_CONFIG.iconSize, 1);
+            sprite.position.copy(province.position);
+            sprite.renderOrder = 100;
+
+            // 添加到场景和数组
+            scene.add(sprite);
+            provinceIconsArray.push(sprite);
+          });
+
+          // 创建标签
+          createProvinceLabels();
+        },
+        undefined,
+        (error) => {
+          console.error("图标纹理加载失败:", error);
+        }
+      );
+    };
+
+    /**
+     * 创建所有省级标签
+     */
+    const createProvinceLabels = () => {
+      provinceDataArray.forEach((province) => {
+        // 创建Canvas绘制标签文字
+        const canvas = document.createElement("canvas");
+        const context = canvas.getContext("2d");
+        canvas.width = 1024;
+        canvas.height = 512;
+
+        // 清空画布
+        context.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 设置文字样式
+        const fontSize = 80;
+        context.font = `bold ${fontSize}px Arial, sans-serif`;
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+
+        // 分别测量省名和数值的宽度
+        const provinceName = province.name;
+        const provinceValue = province.data;
+        const separator = ": ";
+
+        const nameMetrics = context.measureText(provinceName);
+        const separatorMetrics = context.measureText(separator);
+        const valueMetrics = context.measureText(provinceValue);
+
+        const totalWidth =
+          nameMetrics.width + separatorMetrics.width + valueMetrics.width;
+        const textHeight = fontSize;
+
+        // 计算背景矩形的尺寸和位置（带内边距）
+        const padding = ICON_CONFIG.labelPadding / 10; // 缩放到canvas尺寸
+        const bgWidth = totalWidth + padding * 2;
+        const bgHeight = textHeight + padding * 2;
+        const bgX = (canvas.width - bgWidth) / 2;
+        const bgY = (canvas.height - bgHeight) / 2;
+        const borderRadius = ICON_CONFIG.labelBorderRadius / 10; // 圆角
+
+        // 绘制圆角矩形背景
+        context.fillStyle = ICON_CONFIG.labelBgColor;
+        context.beginPath();
+        context.moveTo(bgX + borderRadius, bgY);
+        context.lineTo(bgX + bgWidth - borderRadius, bgY);
+        context.quadraticCurveTo(
+          bgX + bgWidth,
+          bgY,
+          bgX + bgWidth,
+          bgY + borderRadius
+        );
+        context.lineTo(bgX + bgWidth, bgY + bgHeight - borderRadius);
+        context.quadraticCurveTo(
+          bgX + bgWidth,
+          bgY + bgHeight,
+          bgX + bgWidth - borderRadius,
+          bgY + bgHeight
+        );
+        context.lineTo(bgX + borderRadius, bgY + bgHeight);
+        context.quadraticCurveTo(
+          bgX,
+          bgY + bgHeight,
+          bgX,
+          bgY + bgHeight - borderRadius
+        );
+        context.lineTo(bgX, bgY + borderRadius);
+        context.quadraticCurveTo(bgX, bgY, bgX + borderRadius, bgY);
+        context.closePath();
+        context.fill();
+
+        // 计算文字起始位置（居中）
+        const centerY = canvas.height / 2;
+        const startX = (canvas.width - totalWidth) / 2;
+
+        // 绘制省名（白色）
+        context.fillStyle = "#ffffff";
+        context.textAlign = "left";
+        context.fillText(provinceName, startX, centerY);
+
+        // 绘制分隔符（白色）
+        const separatorX = startX + nameMetrics.width;
+        context.fillText(separator, separatorX, centerY);
+
+        // 绘制数值（柔和的黄色，避免触发Bloom）
+        context.fillStyle = "#e6d700"; // 降低亮度的黄色
+        const valueX = separatorX + separatorMetrics.width;
+        context.fillText(provinceValue, valueX, centerY);
+
+        // 创建标签精灵
+        const labelTexture = new THREE.CanvasTexture(canvas);
+        const labelMaterial = new THREE.SpriteMaterial({
+          map: labelTexture,
+          transparent: true,
+          opacity: 0.85, // 降低不透明度，避免过亮和触发Bloom
+          depthTest: true,
+          depthWrite: true,
+          // 不设置color和blending，避免参与Bloom后处理
+        });
+
+        const labelSprite = new THREE.Sprite(labelMaterial);
+        labelSprite.scale.set(
+          ICON_CONFIG.labelFontSize * 3,
+          ICON_CONFIG.labelFontSize * 1.5,
+          1
+        );
+        labelSprite.position.set(
+          province.position.x,
+          province.position.y + ICON_CONFIG.labelOffsetY,
+          province.position.z
+        );
+        labelSprite.renderOrder = 101; // 标签在图标之上
+
+        // 添加userData用于标识
+        labelSprite.userData = {
+          provinceName: province.name,
+          isProvinceLabel: true,
+        };
+
+        scene.add(labelSprite);
+        provinceLabelsArray.push(labelSprite);
+      });
+    };
+
+    /**
      * 预加载中文 typeface.json（顺序尝试 public/fonts 下的候选文件）
      * 成功后赋值 cnFont，用于 TextGeometry 挤出中文
      */
@@ -452,7 +722,9 @@ export default {
 
       // 加载中国地图纹理（整体贴图）
       const textureLoader = new THREE.TextureLoader();
-      const chinaTexture = textureLoader.load('/src/assets/image/home/quanGuo.png');
+      const chinaTexture = textureLoader.load(
+        "/src/assets/image/home/quanGuo.png"
+      );
 
       // 1. 创建省份顶面（使用 chinaData）
       chinaData.features.forEach((feature) => {
@@ -466,13 +738,22 @@ export default {
 
       // 3. 创建中国边界线动画（基于 chinaBorderData，排除台湾）
       createChinaBorderLineAnimation(center, scale);
+
+      // 4. 创建省级图标和标签（使用Sprite保持方向一致）
+      createProvinceIconsWithSprite(center, scale);
     };
 
     /**
      * 创建省份顶面网格（使用 chinaData）
      * 只渲染顶面，不渲染侧面
      */
-    const createProvinceTopMesh = (feature, center, scale, bounds, chinaTexture) => {
+    const createProvinceTopMesh = (
+      feature,
+      center,
+      scale,
+      bounds,
+      chinaTexture
+    ) => {
       const provinceGroup = new THREE.Group();
       const provinceName = feature.properties.name;
       const actualExtrudeHeight = 15000; // 统一高度
@@ -525,7 +806,7 @@ export default {
         }
 
         // 设置UV属性
-        shapeGeometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+        shapeGeometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
 
         // 创建顶面材质（带纹理贴图，使用UV映射）
         const topMaterial = new THREE.MeshPhongMaterial({
@@ -625,13 +906,15 @@ export default {
 
       scene.add(provinceGroup);
 
-      provinces.push({
+      const provinceObj = {
         group: provinceGroup,
         meshes: provinceGroup.children.filter(
           (child) => child.type === "Mesh" && child.geometry
         ),
         name: provinceName,
-      });
+      };
+
+      provinces.push(provinceObj);
     };
 
     /**
@@ -708,7 +991,7 @@ export default {
           visible: false,
         });
 
-        // 侧面材质 - 垂直流动光带效果
+        // 侧面材质 - 垂直流动光带效果（降低亮度）
         const sideMaterial = new THREE.ShaderMaterial({
           side: THREE.DoubleSide,
           transparent: true,
@@ -717,6 +1000,7 @@ export default {
             time: { value: 0.0 },
             num: { value: 2.0 }, // 光带数量
             color1: { value: new THREE.Color("#00FFFF") },
+            brightness: { value: 0.5 }, // 亮度系数（降低亮度）
           },
           vertexShader: `
             varying vec2 vUv;
@@ -733,6 +1017,7 @@ export default {
           fragmentShader: `uniform vec3 color1;
             uniform float time;
             uniform float num;
+            uniform float brightness;
             varying vec2 vUv;
             varying vec3 vNormal;
             varying vec3 vPosition;
@@ -752,12 +1037,12 @@ export default {
               float bands = fract(wave * num);
 
               // 光带效果：接近0时亮，接近1时暗
-              float alpha = 1.0 - bands;
+              float alpha = (1.0 - bands) * 0.6; // 降低透明度，减少整体亮度
 
-              // 增强发光效果以触发Bloom后处理 - 提高亮度以产生强烈辉光
-              // vec3 glowColor = color1 * (1.5 + alpha * 2.0); // 大幅增强亮度
+              // 降低颜色亮度，避免触发过强的Bloom效果
+              vec3 finalColor = color1 * brightness;
 
-              gl_FragColor = vec4(color1, alpha);
+              gl_FragColor = vec4(finalColor, alpha);
             }`,
         });
 
@@ -875,12 +1160,12 @@ export default {
         const initialPositions = fullPositions.slice(0, halfPoints * 3);
         lineGeometry.setPositions(initialPositions);
 
-        // 创建 LineMaterial - 高亮度以产生强烈辉光效果
+        // 创建 LineMaterial - 极亮青蓝色强辉光效果
         const lineMaterial = new LineMaterial({
-          color: 0xffffff, // 纯白色，最高亮度
-          linewidth: 4, // 恢复线宽到4px
+          color: 0xe0f7fa, // 极亮青蓝色（接近白色的青蓝，强烈辉光）
+          linewidth: 3, // 线宽5px，更明显
           transparent: true,
-          opacity: 1, // 完全不透明
+          opacity: 1.0, // 完全不透明，增强辉光
           depthWrite: false,
           depthTest: false,
         });
@@ -1084,14 +1369,14 @@ export default {
         // bloomPass.resolution.set(width * 0.5, height * 0.5);
       }
 
-      // 更新FXAA分辨率
-      const fxaaPass = composer.passes.find(
-        (pass) => pass.material && pass.material.uniforms.resolution
-      );
-      if (fxaaPass) {
-        fxaaPass.material.uniforms["resolution"].value.x = 1 / width;
-        fxaaPass.material.uniforms["resolution"].value.y = 1 / height;
-      }
+      // 移除FXAA分辨率更新（已禁用FXAA以提升性能）
+      // const fxaaPass = composer.passes.find(
+      //   (pass) => pass.material && pass.material.uniforms.resolution
+      // );
+      // if (fxaaPass) {
+      //   fxaaPass.material.uniforms["resolution"].value.x = 1 / width;
+      //   fxaaPass.material.uniforms["resolution"].value.y = 1 / height;
+      // }
 
       // 更新所有 LineMaterial 的分辨率
       if (scene.userData.lineMaterials) {
@@ -1254,44 +1539,53 @@ export default {
         });
       }
 
-      // 更新中国边界线动画 - 滚动显示一半的点（头尾连贯）
+      // 更新中国边界线动画 - 降低更新频率以提升性能
       if (scene.userData.borderLines) {
-        scene.userData.borderLines.forEach((borderLine) => {
-          // 每帧移动起始索引（控制动画速度）
-          borderLine.startIndex += 2; // 每帧前进2个点
+        // 初始化帧计数器
+        if (!scene.userData.borderLineFrameCount) {
+          scene.userData.borderLineFrameCount = 0;
+        }
 
-          // 循环播放：当起始索引超出总点数时重置
-          if (borderLine.startIndex >= borderLine.totalPoints) {
-            borderLine.startIndex = 0;
-          }
+        // 每3帧更新一次边界线动画（降低更新频率）
+        scene.userData.borderLineFrameCount++;
+        if (scene.userData.borderLineFrameCount % 3 === 0) {
+          scene.userData.borderLines.forEach((borderLine) => {
+            // 每次更新移动起始索引（控制动画速度）
+            borderLine.startIndex += 2; // 每次前进2个点
 
-          // 构建当前应该显示的点位数组（头尾连贯）
-          const currentPositions = [];
+            // 循环播放：当起始索引超出总点数时重置
+            if (borderLine.startIndex >= borderLine.totalPoints) {
+              borderLine.startIndex = 0;
+            }
 
-          for (let i = 0; i < borderLine.halfPoints; i++) {
-            // 计算当前点的索引（循环取模）
-            const pointIndex =
-              (borderLine.startIndex + i) % borderLine.totalPoints;
-            const posIndex = pointIndex * 3;
+            // 构建当前应该显示的点位数组（头尾连贯）
+            const currentPositions = [];
 
-            // 添加该点的x, y, z坐标
-            currentPositions.push(
-              borderLine.fullPositions[posIndex],
-              borderLine.fullPositions[posIndex + 1],
-              borderLine.fullPositions[posIndex + 2]
-            );
-          }
+            for (let i = 0; i < borderLine.halfPoints; i++) {
+              // 计算当前点的索引（循环取模）
+              const pointIndex =
+                (borderLine.startIndex + i) % borderLine.totalPoints;
+              const posIndex = pointIndex * 3;
 
-          // 更新Line2
-          borderLine.geometry.setPositions(currentPositions);
-          borderLine.line.computeLineDistances();
+              // 添加该点的x, y, z坐标
+              currentPositions.push(
+                borderLine.fullPositions[posIndex],
+                borderLine.fullPositions[posIndex + 1],
+                borderLine.fullPositions[posIndex + 2]
+              );
+            }
 
-          // 标记geometry需要更新
-          if (borderLine.geometry.attributes.instanceStart) {
-            borderLine.geometry.attributes.instanceStart.needsUpdate = true;
-            borderLine.geometry.attributes.instanceEnd.needsUpdate = true;
-          }
-        });
+            // 更新Line2
+            borderLine.geometry.setPositions(currentPositions);
+            borderLine.line.computeLineDistances();
+
+            // 标记geometry需要更新
+            if (borderLine.geometry.attributes.instanceStart) {
+              borderLine.geometry.attributes.instanceStart.needsUpdate = true;
+              borderLine.geometry.attributes.instanceEnd.needsUpdate = true;
+            }
+          });
+        }
       }
 
       // 更新3D文字标签的浮动动画
@@ -1312,6 +1606,8 @@ export default {
           currentTextLabel.quaternion.copy(camera.quaternion);
         }
       }
+
+      // Sprite会自动面向相机，无需手动更新Billboard效果
 
       // 更新角度显示（用于调试）
       // 使用后处理渲染
@@ -1347,6 +1643,27 @@ export default {
         }
         currentTextLabel = null;
       }
+
+      // 清理省级图标Sprite
+      provinceIconsArray.forEach((icon) => {
+        scene.remove(icon);
+        if (icon.material) {
+          if (icon.material.map) icon.material.map.dispose();
+          icon.material.dispose();
+        }
+      });
+      provinceIconsArray = [];
+
+      // 清理省级标签
+      provinceLabelsArray.forEach((label) => {
+        scene.remove(label);
+        if (label.material) {
+          if (label.material.map) label.material.map.dispose();
+          label.material.dispose();
+        }
+      });
+      provinceLabelsArray = [];
+      provinceDataArray = [];
 
       if (renderer) {
         renderer.dispose();
