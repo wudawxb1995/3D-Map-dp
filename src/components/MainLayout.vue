@@ -3,18 +3,12 @@
     <main class="content-area">
       <router-view />
     </main>
-    <Sidebar />
   </div>
 </template>
 
 <script>
-import Sidebar from './Sidebar.vue'
-
 export default {
-  name: 'MainLayout',
-  components: {
-    Sidebar
-  }
+  name: 'MainLayout'
 }
 </script>
 

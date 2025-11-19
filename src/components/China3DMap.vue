@@ -6,10 +6,46 @@
       <div
         v-for="item in dataTypes"
         :key="item.value"
-        :class="['control-btn', { active: item.value === 'pillar' ? showPillars : showLabels }]"
-        @click="switchDataType(item.value)"
+        class="control-item"
       >
-        {{ item.label }}
+        <!-- 光柱按钮左侧显示辉光单选框 -->
+        <label
+          v-if="item.value === 'pillar'"
+          class="glow-checkbox"
+          @click.stop
+        >
+          <input
+            type="checkbox"
+            v-model="pillarGlowEnabled"
+            @change="togglePillarGlow"
+          />
+          <span class="checkbox-label">辉光</span>
+        </label>
+
+        <!-- 飞线按钮左侧显示辉光单选框 -->
+        <label
+          v-if="item.value === 'flyline'"
+          class="glow-checkbox"
+          @click.stop
+        >
+          <input
+            type="checkbox"
+            v-model="pulseGlowEnabled"
+            @change="togglePulseGlow"
+          />
+          <span class="checkbox-label">辉光</span>
+        </label>
+
+        <div
+          :class="['control-btn', {
+            active: item.value === 'pillar' ? showPillars :
+                    item.value === 'label' ? showLabels :
+                    showFlylines
+          }]"
+          @click="switchDataType(item.value)"
+        >
+          {{ item.label }}
+        </div>
       </div>
     </div>
   </div>
@@ -35,7 +71,6 @@ import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
-import * as dat from "dat.gui";
 
 import FZLISHU_TYPEFACE_URL from "@/assets/fonts/FZLiShu-S01_Regular.json?url";
 import FZWEIBEI_TYPEFACE_URL from "@/assets/fonts/FZWeiBei-S03_Regular.json?url";
@@ -47,7 +82,6 @@ export default {
     let scene, camera, renderer, composer;
     let provinces = [];
     const animationId = ref(null);
-    let gui = null; // dat.GUI实例
     let bloomPass = null; // Bloom通道引用
 
     // 射线拾取相关变量
@@ -72,11 +106,17 @@ export default {
     let lightPillarsArray = []; // 存储所有光柱
     let pillarLabelsArray = []; // 存储光柱顶部的数据标签
 
+    // 飞线相关变量
+    let flylinesArray = []; // 存储所有飞线
+    let flylineRipplesArray = []; // 存储所有波纹
+    let flylinePulsesArray = []; // 存储所有脉冲对象
+
     // 数据类型切换
     const currentDataType = ref('pillar'); // 当前数据类型
     const dataTypes = ref([
       { label: '光柱', value: 'pillar' },
-      { label: '标牌', value: 'label' }
+      { label: '标牌', value: 'label' },
+      { label: '飞线', value: 'flyline' }
     ]);
 
     // 光柱显示状态控制
@@ -84,6 +124,15 @@ export default {
 
     // 标牌显示状态控制
     const showLabels = ref(true); // 是否显示标牌（默认显示）
+
+    // 飞线显示状态控制
+    const showFlylines = ref(false); // 是否显示飞线（默认不显示）
+
+    // 光柱辉光效果控制
+    const pillarGlowEnabled = ref(false); // 是否启用光柱辉光效果（默认不启用）
+
+    // 脉冲辉光效果控制
+    const pulseGlowEnabled = ref(false); // 是否启用脉冲辉光效果（默认不启用）
 
     // 本地 assets 下提供的中文 typeface.json 候选列表（存在其一即可）
     const CN_TYPEFACE_CANDIDATES = [
@@ -135,6 +184,25 @@ export default {
         { min: 6000, max: 8000, color: 0x0091ea }, // 亮更深蓝色
         { min: 8000, max: Infinity, color: 0x0277bd } // 亮最深蓝色
       ]
+    };
+
+    // 飞线配置
+    const FLYLINE_CONFIG = {
+      color: 0x00ffff, // 飞线颜色（青色）
+      pulseColor: 0xff9900, // 脉冲颜色（橙色，更明显）
+      lineWidth: 2, // 飞线宽度
+      pulseSpeed: 0.008, // 脉冲速度（降低速度，更慢）
+      pulseLength: 0.15, // 脉冲长度（增加到35%，更明显）
+      curveHeight: 8000, // 飞线弧度高度
+      rippleColor: 0x00ffff, // 波纹颜色（青色）
+      rippleMaxRadius: 3000, // 波纹最大半径
+      rippleSpeed: 0.005, // 波纹扩散速度
+      rippleCount: 3, // 波纹数量（3圈）
+      rippleInterval: 0.33, // 波纹间隔（1/3，确保3圈均匀分布）
+      pulseHeadRadius: 120, // 脉冲头部半径（冲向目标的前端，粗头）
+      pulseTailRadius: 20, // 脉冲尾部半径（后端，细尾）
+      pulseTubeSegments: 16, // 管道圆周分段数
+      pulseRadialSegments: 32, // 管道径向分段数
     };
 
     // 初始化Three.js场景
@@ -783,7 +851,8 @@ export default {
           depthWrite: false,
           uniforms: {
             color: { value: colorObj },
-            pillarHeight: { value: pillarHeight }
+            pillarHeight: { value: pillarHeight },
+            glowEnabled: { value: pillarGlowEnabled.value ? 1.0 : 0.0 } // 辉光开关
           },
           vertexShader: `
             varying vec3 vPosition;
@@ -798,6 +867,7 @@ export default {
           fragmentShader: `
             uniform vec3 color;
             uniform float pillarHeight;
+            uniform float glowEnabled;
             varying vec3 vPosition;
             varying vec3 vNormal;
 
@@ -807,8 +877,26 @@ export default {
               float normalizedY = (vPosition.y + pillarHeight * 0.5) / pillarHeight;
               float alpha = 0.1 + normalizedY * 0.8; // 底部0.9，顶部0.1
 
-              // 添加自发光效果
-              vec3 finalColor = color * 1.5; // 提亮颜色
+              // 根据辉光开关调整颜色亮度
+              vec3 finalColor = color * 1.5; // 基础提亮
+              if (glowEnabled > 0.5) {
+                // 启用辉光时，使用更平滑的算法
+                // 使用平方根函数，让短柱子和高柱子的辉光更均匀
+                float heightNormalized = pillarHeight / 30.0; // 假设最大高度约30
+                heightNormalized = clamp(heightNormalized, 0.0, 1.0);
+
+                // 使用平方根函数，让辉光强度增长更平缓
+                float heightFactor = sqrt(heightNormalized);
+
+                // 辉光强度在1.6-2.0倍之间，整体更柔和
+                // 短柱子约1.6倍，高柱子约2.0倍
+                float glowIntensity = 1.6 + heightFactor * 0.4;
+
+                // 添加垂直方向的辉光渐变，顶部更亮
+                float verticalGlow = 0.8 + normalizedY * 0.2; // 底部0.8，顶部1.0
+
+                finalColor = color * glowIntensity * verticalGlow;
+              }
 
               gl_FragColor = vec4(finalColor, alpha);
             }
@@ -893,6 +981,290 @@ export default {
         scene.add(labelSprite);
         pillarLabelsArray.push(labelSprite);
       });
+    };
+
+    /**
+     * 创建飞线（从北京到各省）
+     */
+    const createFlylines = () => {
+      // 清除旧的飞线、波纹和脉冲
+      flylinesArray.forEach(flyline => {
+        if (flyline.geometry) flyline.geometry.dispose();
+        if (flyline.material) flyline.material.dispose();
+        scene.remove(flyline);
+      });
+      flylineRipplesArray.forEach(ripple => {
+        if (ripple.geometry) ripple.geometry.dispose();
+        if (ripple.material) ripple.material.dispose();
+        scene.remove(ripple);
+      });
+      flylinePulsesArray.forEach(pulse => {
+        if (pulse.geometry) pulse.geometry.dispose();
+        if (pulse.material) pulse.material.dispose();
+        scene.remove(pulse);
+      });
+      flylinesArray = [];
+      flylineRipplesArray = [];
+      flylinePulsesArray = [];
+
+      // 找到北京的位置
+      const beijing = provinceDataArray.find(p => p.name === '北京' || p.name === '北京市');
+      if (!beijing) {
+        console.warn('未找到北京数据');
+        return;
+      }
+
+      const startPos = new THREE.Vector3(
+        beijing.position.x,
+        beijing.position.y + 1000,
+        beijing.position.z
+      );
+
+      // 为每个省份创建飞线
+      provinceDataArray.forEach(province => {
+        // 跳过北京自己
+        if (province.name === '北京' || province.name === '北京市') {
+          return;
+        }
+
+        const endPos = new THREE.Vector3(
+          province.position.x,
+          province.position.y + 1000,
+          province.position.z
+        );
+
+        // 创建飞线曲线（贝塞尔曲线）
+        const midPoint = new THREE.Vector3(
+          (startPos.x + endPos.x) / 2,
+          Math.max(startPos.y, endPos.y) + FLYLINE_CONFIG.curveHeight,
+          (startPos.z + endPos.z) / 2
+        );
+
+        const curve = new THREE.QuadraticBezierCurve3(startPos, midPoint, endPos);
+        const points = curve.getPoints(50);
+        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+
+        // 创建基础飞线材质（简单的线条，半透明）
+        const material = new THREE.LineBasicMaterial({
+          color: FLYLINE_CONFIG.color,
+          transparent: true,
+          opacity: 0.3,
+          depthTest: false,
+        });
+
+        const line = new THREE.Line(geometry, material);
+        line.renderOrder = 998;
+        line.visible = showFlylines.value;
+        line.userData = {
+          isFlyline: true,
+          curve: curve, // 保存曲线用于脉冲动画
+          startTime: Math.random() * 2, // 随机起始时间，让飞线不同步
+        };
+
+        scene.add(line);
+        flylinesArray.push(line);
+
+        // 创建脉冲对象（使用TubeGeometry实现头大尾细）
+        createPulse(curve, line.userData.startTime);
+
+        // 创建目标点的波纹效果
+        createRipples(endPos);
+      });
+    };
+
+    /**
+     * 创建脉冲对象（头粗尾细的管道）
+     * @param {THREE.Curve} curve - 飞线曲线
+     * @param {number} startTime - 起始时间偏移
+     */
+    const createPulse = (curve, startTime) => {
+      // 自定义半径函数：头粗尾细
+      // t: 0-1，表示沿着管道的位置
+      // t=0 是脉冲的后端（尾部），t=1 是脉冲的前端（头部，冲向目标）
+      const radiusFunction = (t) => {
+        // 使用指数函数实现头粗尾细的效果
+        // t 越大（越接近前端），半径越大
+        const intensity = Math.pow(t, 0.4); // 使用0.4次方，让头部更粗
+
+        // 从尾部半径过渡到头部半径
+        const radius = FLYLINE_CONFIG.pulseTailRadius +
+                      (FLYLINE_CONFIG.pulseHeadRadius - FLYLINE_CONFIG.pulseTailRadius) * intensity;
+
+        return radius;
+      };
+
+      // 创建管道几何体
+      // 注意：这里创建一个短的管道段，代表脉冲的长度
+      const pulseSegments = 20; // 脉冲的分段数
+
+      // 创建一个临时的短曲线段用于脉冲
+      const tempPoints = curve.getPoints(100);
+      const pulseStartIndex = 0;
+      const pulseEndIndex = Math.floor(tempPoints.length * FLYLINE_CONFIG.pulseLength);
+      const pulsePoints = tempPoints.slice(pulseStartIndex, pulseEndIndex);
+
+      // 使用CatmullRomCurve3创建平滑的脉冲曲线
+      const pulsePath = new THREE.CatmullRomCurve3(pulsePoints);
+
+      const tubeGeometry = new THREE.TubeGeometry(
+        pulsePath,
+        pulseSegments,
+        1, // 基础半径（会被radiusFunction覆盖）
+        FLYLINE_CONFIG.pulseTubeSegments,
+        false
+      );
+
+      // 手动修改几何体的顶点，应用自定义半径函数
+      const positions = tubeGeometry.attributes.position;
+      const normals = tubeGeometry.attributes.normal;
+
+      for (let i = 0; i < positions.count; i++) {
+        // 计算当前顶点在管道上的位置（0-1）
+        const segmentIndex = Math.floor(i / (FLYLINE_CONFIG.pulseTubeSegments + 1));
+        const t = segmentIndex / pulseSegments;
+
+        // 获取自定义半径
+        const radius = radiusFunction(t);
+
+        // 获取法线方向
+        const nx = normals.getX(i);
+        const ny = normals.getY(i);
+        const nz = normals.getZ(i);
+
+        // 获取中心点位置
+        const centerPoint = pulsePath.getPoint(t);
+
+        // 应用半径到顶点位置
+        positions.setX(i, centerPoint.x + nx * radius);
+        positions.setY(i, centerPoint.y + ny * radius);
+        positions.setZ(i, centerPoint.z + nz * radius);
+      }
+
+      positions.needsUpdate = true;
+
+      // 创建脉冲材质（使用ShaderMaterial实现渐变效果）
+      const pulseMaterial = new THREE.ShaderMaterial({
+        transparent: true,
+        depthTest: false,
+        side: THREE.DoubleSide,
+        uniforms: {
+          color: { value: new THREE.Color(FLYLINE_CONFIG.pulseColor) },
+          glowEnabled: { value: pulseGlowEnabled.value ? 1.0 : 0.0 }, // 辉光开关
+        },
+        vertexShader: `
+          varying vec2 vUv;
+
+          void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform vec3 color;
+          uniform float glowEnabled;
+          varying vec2 vUv;
+
+          void main() {
+            // 沿着管道方向（vUv.x）实现透明度渐变
+            // vUv.x=0 是尾部（后端），vUv.x=1 是头部（前端，冲向目标）
+            // 头部（vUv.x=1）：高透明度，更亮
+            // 尾部（vUv.x=0）：低透明度，更暗
+            float alpha = 0.3 + vUv.x * 0.7; // 尾部0.3，头部1.0
+
+            // 添加径向渐变，让边缘更透明
+            float radialFade = 1.0 - abs(vUv.y - 0.5) * 2.0;
+            alpha *= radialFade * 0.8 + 0.2;
+
+            // 根据辉光开关调整颜色亮度
+            vec3 finalColor = color;
+            if (glowEnabled > 0.5) {
+              // 启用辉光时，增加颜色亮度以触发Bloom效果
+              finalColor = color * 2.5; // 提高亮度2.5倍
+            }
+
+            gl_FragColor = vec4(finalColor, alpha);
+          }
+        `
+      });
+
+      const pulseMesh = new THREE.Mesh(tubeGeometry, pulseMaterial);
+      pulseMesh.renderOrder = 999;
+      pulseMesh.visible = showFlylines.value;
+      pulseMesh.userData = {
+        isPulse: true,
+        curve: curve, // 完整的飞线曲线
+        pulsePath: pulsePath, // 脉冲的路径
+        startTime: startTime,
+        progress: 0, // 当前进度（0-1）
+      };
+
+      scene.add(pulseMesh);
+      flylinePulsesArray.push(pulseMesh);
+    };
+
+    /**
+     * 创建波纹效果
+     * @param {THREE.Vector3} position - 波纹位置
+     */
+    const createRipples = (position) => {
+      for (let i = 0; i < FLYLINE_CONFIG.rippleCount; i++) {
+        const geometry = new THREE.RingGeometry(500, 4000, 32);
+        const material = new THREE.ShaderMaterial({
+          transparent: true,
+          depthTest: false,
+          side: THREE.DoubleSide,
+          uniforms: {
+            color: { value: new THREE.Color(FLYLINE_CONFIG.rippleColor) },
+            time: { value: 0 },
+            maxRadius: { value: FLYLINE_CONFIG.rippleMaxRadius },
+            offset: { value: i * FLYLINE_CONFIG.rippleInterval }, // 波纹偏移
+          },
+          vertexShader: `
+            varying vec2 vUv;
+
+            void main() {
+              vUv = uv;
+              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+          `,
+          fragmentShader: `
+            uniform vec3 color;
+            uniform float time;
+            uniform float maxRadius;
+            uniform float offset;
+            varying vec2 vUv;
+
+            void main() {
+              // 计算波纹扩散
+              float progress = mod(time + offset, 1.0);
+
+              // 计算当前像素到中心的距离
+              vec2 center = vec2(0.5, 0.5);
+              float dist = distance(vUv, center) * 2.0;
+
+              // 波纹效果
+              float ring = abs(dist - progress);
+              float alpha = 1.0 - ring * 10.0;
+              alpha *= (1.0 - progress); // 随着扩散逐渐消失
+              alpha = clamp(alpha, 0.0, 0.8);
+
+              gl_FragColor = vec4(color, alpha);
+            }
+          `
+        });
+
+        const ripple = new THREE.Mesh(geometry, material);
+        ripple.position.copy(position);
+        ripple.rotation.x = -Math.PI / 2; // 水平放置
+        ripple.renderOrder = 997;
+        ripple.visible = showFlylines.value;
+        ripple.userData = {
+          isRipple: true,
+        };
+
+        scene.add(ripple);
+        flylineRipplesArray.push(ripple);
+      }
     };
 
     /**
@@ -1853,6 +2225,95 @@ export default {
 
       // Sprite会自动面向相机，无需手动更新Billboard效果
 
+      // 更新脉冲位置动画
+      flylinePulsesArray.forEach(pulse => {
+        if (!pulse.userData) return;
+
+        // 更新进度
+        pulse.userData.progress += FLYLINE_CONFIG.pulseSpeed;
+
+        // 循环播放
+        if (pulse.userData.progress > 1) {
+          pulse.userData.progress = 0;
+        }
+
+        // 根据进度更新脉冲位置
+        const curve = pulse.userData.curve;
+        if (curve) {
+          // 计算脉冲在曲线上的位置
+          const progress = (pulse.userData.progress + pulse.userData.startTime) % 1;
+
+          // 更新脉冲的位置和方向
+          // 需要重新创建脉冲的路径
+          const pulseLength = FLYLINE_CONFIG.pulseLength;
+          const startProgress = Math.max(0, progress - pulseLength);
+          const endProgress = progress;
+
+          // 获取脉冲路径的点
+          const pulsePoints = [];
+          const segments = 20;
+          for (let i = 0; i <= segments; i++) {
+            const t = startProgress + (endProgress - startProgress) * (i / segments);
+            pulsePoints.push(curve.getPoint(t));
+          }
+
+          // 更新脉冲路径
+          if (pulsePoints.length > 1) {
+            const newPulsePath = new THREE.CatmullRomCurve3(pulsePoints);
+
+            // 重新创建管道几何体
+            const radiusFunction = (t) => {
+              const intensity = Math.pow(t, 0.4);
+              return FLYLINE_CONFIG.pulseTailRadius +
+                     (FLYLINE_CONFIG.pulseHeadRadius - FLYLINE_CONFIG.pulseTailRadius) * intensity;
+            };
+
+            const newTubeGeometry = new THREE.TubeGeometry(
+              newPulsePath,
+              segments,
+              1,
+              FLYLINE_CONFIG.pulseTubeSegments,
+              false
+            );
+
+            // 应用自定义半径
+            const positions = newTubeGeometry.attributes.position;
+            const normals = newTubeGeometry.attributes.normal;
+
+            for (let i = 0; i < positions.count; i++) {
+              const segmentIndex = Math.floor(i / (FLYLINE_CONFIG.pulseTubeSegments + 1));
+              const t = segmentIndex / segments;
+              const radius = radiusFunction(t);
+
+              const nx = normals.getX(i);
+              const ny = normals.getY(i);
+              const nz = normals.getZ(i);
+
+              const centerPoint = newPulsePath.getPoint(t);
+
+              positions.setX(i, centerPoint.x + nx * radius);
+              positions.setY(i, centerPoint.y + ny * radius);
+              positions.setZ(i, centerPoint.z + nz * radius);
+            }
+
+            positions.needsUpdate = true;
+
+            // 替换几何体
+            if (pulse.geometry) {
+              pulse.geometry.dispose();
+            }
+            pulse.geometry = newTubeGeometry;
+          }
+        }
+      });
+
+      // 更新波纹扩散动画
+      flylineRipplesArray.forEach(ripple => {
+        if (ripple.material && ripple.material.uniforms && ripple.material.uniforms.time) {
+          ripple.material.uniforms.time.value += FLYLINE_CONFIG.rippleSpeed;
+        }
+      });
+
       // 更新角度显示（用于调试）
       // 使用后处理渲染
       composer.render();
@@ -1909,85 +2370,33 @@ export default {
       provinceLabelsArray = [];
       provinceDataArray = [];
 
+      // 清理飞线
+      flylinesArray.forEach((flyline) => {
+        scene.remove(flyline);
+        if (flyline.geometry) flyline.geometry.dispose();
+        if (flyline.material) flyline.material.dispose();
+      });
+      flylinesArray = [];
+
+      // 清理波纹
+      flylineRipplesArray.forEach((ripple) => {
+        scene.remove(ripple);
+        if (ripple.geometry) ripple.geometry.dispose();
+        if (ripple.material) ripple.material.dispose();
+      });
+      flylineRipplesArray = [];
+
       if (renderer) {
         renderer.dispose();
       }
       if (container.value && renderer) {
         container.value.removeChild(renderer.domElement);
       }
-
-      // 清理GUI
-      if (gui) {
-        gui.destroy();
-        gui = null;
-      }
     };
 
     /**
-     * 初始化GUI控制面板
-     */
-    const initGUI = () => {
-      // 创建GUI实例
-      gui = new dat.GUI({ autoPlace: false });
-      gui.domElement.style.position = "absolute";
-      gui.domElement.style.left = "20px";
-      gui.domElement.style.bottom = "20px";
-      gui.domElement.style.zIndex = "1000";
-      container.value.appendChild(gui.domElement);
-
-      // Bloom效果参数
-      const bloomParams = {
-        enabled: true,
-        strength: 0.6,
-        radius: 0.3,
-        threshold: 0.9,
-      };
-
-      // 添加Bloom控制文件夹
-      const bloomFolder = gui.addFolder("Bloom效果");
-
-      bloomFolder
-        .add(bloomParams, "enabled")
-        .name("启用Bloom")
-        .onChange((value) => {
-          if (bloomPass) {
-            bloomPass.enabled = value;
-          }
-        });
-
-      bloomFolder
-        .add(bloomParams, "strength", 0, 3, 0.1)
-        .name("强度")
-        .onChange((value) => {
-          if (bloomPass) {
-            bloomPass.strength = value;
-          }
-        });
-
-      bloomFolder
-        .add(bloomParams, "radius", 0, 1, 0.05)
-        .name("半径")
-        .onChange((value) => {
-          if (bloomPass) {
-            bloomPass.radius = value;
-          }
-        });
-
-      bloomFolder
-        .add(bloomParams, "threshold", 0, 1, 0.05)
-        .name("阈值")
-        .onChange((value) => {
-          if (bloomPass) {
-            bloomPass.threshold = value;
-          }
-        });
-
-      bloomFolder.open();
-    };
-
-    /**
-     * 切换数据类型（切换光柱或标牌显示/隐藏）
-     * @param {string} type - 数据类型（'pillar' 或 'label'）
+     * 切换数据类型（切换光柱、标牌或飞线显示/隐藏）
+     * @param {string} type - 数据类型（'pillar'、'label' 或 'flyline'）
      */
     const switchDataType = (type) => {
       currentDataType.value = type;
@@ -2018,13 +2427,59 @@ export default {
         provinceIconsArray.forEach(icon => {
           icon.visible = showLabels.value;
         });
+      } else if (type === 'flyline') {
+        // 切换飞线显示状态
+        showFlylines.value = !showFlylines.value;
+
+        // 如果是第一次显示飞线，需要创建飞线
+        if (showFlylines.value && flylinesArray.length === 0) {
+          createFlylines();
+        }
+
+        // 更新飞线可见性
+        flylinesArray.forEach(flyline => {
+          flyline.visible = showFlylines.value;
+        });
+
+        // 更新脉冲可见性
+        flylinePulsesArray.forEach(pulse => {
+          pulse.visible = showFlylines.value;
+        });
+
+        // 更新波纹可见性
+        flylineRipplesArray.forEach(ripple => {
+          ripple.visible = showFlylines.value;
+        });
       }
+    };
+
+    /**
+     * 切换光柱辉光效果
+     */
+    const togglePillarGlow = () => {
+      // 更新所有光柱材质的辉光开关
+      lightPillarsArray.forEach(pillar => {
+        if (pillar.material && pillar.material.uniforms && pillar.material.uniforms.glowEnabled) {
+          pillar.material.uniforms.glowEnabled.value = pillarGlowEnabled.value ? 1.0 : 0.0;
+        }
+      });
+    };
+
+    /**
+     * 切换脉冲辉光效果
+     */
+    const togglePulseGlow = () => {
+      // 更新所有脉冲材质的辉光开关
+      flylinePulsesArray.forEach(pulse => {
+        if (pulse.material && pulse.material.uniforms && pulse.material.uniforms.glowEnabled) {
+          pulse.material.uniforms.glowEnabled.value = pulseGlowEnabled.value ? 1.0 : 0.0;
+        }
+      });
     };
 
     onMounted(() => {
       initScene();
       loadChineseTypeface(); // 预加载中文typeface.json（若存在）
-      initGUI(); // 初始化GUI控制面板
     });
 
     onUnmounted(() => {
@@ -2037,7 +2492,12 @@ export default {
       dataTypes,
       showPillars,
       showLabels,
+      showFlylines,
+      pillarGlowEnabled,
+      pulseGlowEnabled,
       switchDataType,
+      togglePillarGlow,
+      togglePulseGlow,
     };
   },
 };
@@ -2093,5 +2553,42 @@ export default {
   background: rgba(41, 182, 246, 0.8);
   border-color: rgba(41, 182, 246, 1);
   color: #ffffff;
+}
+
+.control-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.glow-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  user-select: none;
+}
+
+.glow-checkbox:hover {
+  background: rgba(0, 0, 0, 0.8);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.glow-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: rgba(41, 182, 246, 1);
+}
+
+.checkbox-label {
+  color: #ffffff;
+  font-size: 12px;
+  white-space: nowrap;
 }
 </style>
