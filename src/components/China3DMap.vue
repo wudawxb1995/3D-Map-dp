@@ -1,5 +1,18 @@
 <template>
-  <div ref="container" class="china-3d-container"></div>
+  <div class="china-3d-wrapper">
+    <div ref="container" class="china-3d-container"></div>
+    <!-- 右侧按钮组 -->
+    <div class="control-panel">
+      <div
+        v-for="item in dataTypes"
+        :key="item.value"
+        :class="['control-btn', { active: item.value === 'pillar' ? showPillars : showLabels }]"
+        @click="switchDataType(item.value)"
+      >
+        {{ item.label }}
+      </div>
+    </div>
+  </div>
 </template>
 
 <script>
@@ -55,6 +68,23 @@ export default {
     let provinceLabelsArray = []; // 存储所有省级标签
     let provinceDataArray = []; // 存储省份数据（名称、位置等）
 
+    // 光柱相关变量
+    let lightPillarsArray = []; // 存储所有光柱
+    let pillarLabelsArray = []; // 存储光柱顶部的数据标签
+
+    // 数据类型切换
+    const currentDataType = ref('pillar'); // 当前数据类型
+    const dataTypes = ref([
+      { label: '光柱', value: 'pillar' },
+      { label: '标牌', value: 'label' }
+    ]);
+
+    // 光柱显示状态控制
+    const showPillars = ref(false); // 是否显示光柱（默认不显示）
+
+    // 标牌显示状态控制
+    const showLabels = ref(true); // 是否显示标牌（默认显示）
+
     // 本地 assets 下提供的中文 typeface.json 候选列表（存在其一即可）
     const CN_TYPEFACE_CANDIDATES = [
       FZLISHU_TYPEFACE_URL,
@@ -86,6 +116,25 @@ export default {
       labelColor: 0x333333, // 标签文字颜色（深灰色）
       labelBgColor: "#000000", // 标签背景颜色（深蓝色）
       emissiveIntensity: 1.5, // 自发光强度（用于Bloom效果）
+    };
+
+    // 光柱配置
+    const PILLAR_CONFIG = {
+      radius: 750, // 光柱半径（从1500降低到750，减少一半）
+      baseHeight: 15000, // 光柱基础高度（在地块顶面上）
+      maxHeight: 25000, // 光柱最大高度
+      minHeight: 3000, // 光柱最小高度
+      segments: 32, // 圆柱体分段数
+      labelOffsetY: 2000, // 标签相对光柱顶部的Y轴偏移
+      labelFontSize: 3000, // 标签字体大小
+      // 颜色映射（根据数据值分段）- 调亮颜色
+      colorRanges: [
+        { min: 0, max: 2000, color: 0x80d8ff }, // 亮浅蓝色
+        { min: 2000, max: 4000, color: 0x40c4ff }, // 亮中蓝色
+        { min: 4000, max: 6000, color: 0x00b0ff }, // 亮深蓝色
+        { min: 6000, max: 8000, color: 0x0091ea }, // 亮更深蓝色
+        { min: 8000, max: Infinity, color: 0x0277bd } // 亮最深蓝色
+      ]
     };
 
     // 初始化Three.js场景
@@ -512,6 +561,9 @@ export default {
             sprite.position.copy(province.position);
             sprite.renderOrder = 100;
 
+            // 初始状态：受标牌状态控制
+            sprite.visible = showLabels.value;
+
             // 添加到场景和数组
             scene.add(sprite);
             provinceIconsArray.push(sprite);
@@ -519,6 +571,9 @@ export default {
 
           // 创建标签
           createProvinceLabels();
+
+          // 创建光柱
+          createLightPillars();
         },
         undefined,
         (error) => {
@@ -640,6 +695,9 @@ export default {
         );
         labelSprite.renderOrder = 101; // 标签在图标之上
 
+        // 初始状态：受标牌状态控制
+        labelSprite.visible = showLabels.value;
+
         // 添加userData用于标识
         labelSprite.userData = {
           provinceName: province.name,
@@ -648,6 +706,192 @@ export default {
 
         scene.add(labelSprite);
         provinceLabelsArray.push(labelSprite);
+      });
+    };
+
+    /**
+     * 根据数据值获取对应的颜色
+     * @param {number} value - 数据值
+     * @returns {number} 颜色值
+     */
+    const getColorByValue = (value) => {
+      for (let i = 0; i < PILLAR_CONFIG.colorRanges.length; i++) {
+        const range = PILLAR_CONFIG.colorRanges[i];
+        if (value >= range.min && value < range.max) {
+          return range.color;
+        }
+      }
+      return PILLAR_CONFIG.colorRanges[PILLAR_CONFIG.colorRanges.length - 1].color;
+    };
+
+    /**
+     * 格式化数据值为显示文本（如"122万"）
+     * @param {number} value - 数据值
+     * @returns {string} 格式化后的文本
+     */
+    const formatDataValue = (value) => {
+      if (value >= 10000) {
+        return (value / 10000).toFixed(0) + '万';
+      }
+      return value.toString();
+    };
+
+    /**
+     * 创建所有省级光柱
+     */
+    const createLightPillars = () => {
+      // 清除旧的光柱和标签
+      lightPillarsArray.forEach(pillar => {
+        scene.remove(pillar);
+        if (pillar.geometry) pillar.geometry.dispose();
+        if (pillar.material) pillar.material.dispose();
+      });
+      pillarLabelsArray.forEach(label => {
+        scene.remove(label);
+        if (label.material && label.material.map) {
+          label.material.map.dispose();
+        }
+        if (label.material) label.material.dispose();
+      });
+      lightPillarsArray = [];
+      pillarLabelsArray = [];
+
+      provinceDataArray.forEach((province) => {
+        const dataValue = province.data;
+
+        // 计算光柱高度（根据数据值映射）
+        const heightRatio = Math.min(dataValue / 10000, 1); // 归一化到0-1
+        const pillarHeight = PILLAR_CONFIG.minHeight +
+          (PILLAR_CONFIG.maxHeight - PILLAR_CONFIG.minHeight) * heightRatio;
+
+        // 获取颜色
+        const color = getColorByValue(dataValue);
+        const colorObj = new THREE.Color(color);
+
+        // 创建圆柱体几何体
+        const geometry = new THREE.CylinderGeometry(
+          PILLAR_CONFIG.radius,
+          PILLAR_CONFIG.radius,
+          pillarHeight,
+          PILLAR_CONFIG.segments
+        );
+
+        // 创建自定义着色器材质，实现从下到上的透明度渐变
+        const material = new THREE.ShaderMaterial({
+          transparent: true,
+          depthTest: false, // 禁用深度测试，确保不被遮挡
+          depthWrite: false,
+          uniforms: {
+            color: { value: colorObj },
+            pillarHeight: { value: pillarHeight }
+          },
+          vertexShader: `
+            varying vec3 vPosition;
+            varying vec3 vNormal;
+
+            void main() {
+              vPosition = position;
+              vNormal = normal;
+              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+          `,
+          fragmentShader: `
+            uniform vec3 color;
+            uniform float pillarHeight;
+            varying vec3 vPosition;
+            varying vec3 vNormal;
+
+            void main() {
+              // 计算透明度：从底部（0.9）到顶部（0.1）
+              // vPosition.y 范围是 [-pillarHeight/2, pillarHeight/2]
+              float normalizedY = (vPosition.y + pillarHeight * 0.5) / pillarHeight;
+              float alpha = 0.1 + normalizedY * 0.8; // 底部0.9，顶部0.1
+
+              // 添加自发光效果
+              vec3 finalColor = color * 1.5; // 提亮颜色
+
+              gl_FragColor = vec4(finalColor, alpha);
+            }
+          `
+        });
+
+        // 创建光柱网格
+        const pillar = new THREE.Mesh(geometry, material);
+
+        // 设置位置：在省份中心，Y轴位置在地块顶面上
+        const baseY = PILLAR_CONFIG.baseHeight; // 地块顶面高度
+        pillar.position.set(
+          province.position.x,
+          baseY + pillarHeight / 2, // 圆柱体中心点
+          province.position.z
+        );
+
+        // 设置渲染顺序，确保光柱在最上层渲染
+        pillar.renderOrder = 999;
+
+        // 初始状态：隐藏光柱
+        pillar.visible = showPillars.value;
+
+        pillar.userData = {
+          provinceName: province.name,
+          isLightPillar: true,
+          dataValue: dataValue,
+          pillarHeight: pillarHeight
+        };
+
+        scene.add(pillar);
+        lightPillarsArray.push(pillar);
+
+        // 创建光柱顶部的数据标签
+        const labelText = dataValue;
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.width = 1024;
+        canvas.height = 512;
+
+        // 设置文字样式
+        const fontSize = 80;
+        context.font = `bold ${fontSize}px Arial, sans-serif`;
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillStyle = '#ffffff';
+
+        // 绘制文字
+        context.fillText(labelText, canvas.width / 2, canvas.height / 2);
+
+        // 创建标签精灵
+        const labelTexture = new THREE.CanvasTexture(canvas);
+        const labelMaterial = new THREE.SpriteMaterial({
+          map: labelTexture,
+          transparent: true,
+          opacity: 1,
+          depthTest: false,
+          depthWrite: false,
+        });
+
+        const labelSprite = new THREE.Sprite(labelMaterial);
+        labelSprite.scale.set(
+          PILLAR_CONFIG.labelFontSize * 4,
+          PILLAR_CONFIG.labelFontSize * 2,
+          1
+        );
+        labelSprite.position.set(
+          province.position.x,
+          baseY + pillarHeight + PILLAR_CONFIG.labelOffsetY,
+          province.position.z
+        );
+        labelSprite.renderOrder = 1000; // 设置更高的渲染顺序
+
+        // 初始状态：与光柱绑定，光柱显示时才显示
+        labelSprite.visible = showPillars.value;
+
+        labelSprite.userData = {
+          provinceName: province.name,
+          isPillarLabel: true,
+        };
+
+        scene.add(labelSprite);
+        pillarLabelsArray.push(labelSprite);
       });
     };
 
@@ -1741,6 +1985,42 @@ export default {
       bloomFolder.open();
     };
 
+    /**
+     * 切换数据类型（切换光柱或标牌显示/隐藏）
+     * @param {string} type - 数据类型（'pillar' 或 'label'）
+     */
+    const switchDataType = (type) => {
+      currentDataType.value = type;
+
+      if (type === 'pillar') {
+        // 切换光柱显示状态
+        showPillars.value = !showPillars.value;
+
+        // 更新光柱可见性
+        lightPillarsArray.forEach(pillar => {
+          pillar.visible = showPillars.value;
+        });
+
+        // 更新光柱顶部标签可见性（与光柱绑定，同步显示/隐藏）
+        pillarLabelsArray.forEach(label => {
+          label.visible = showPillars.value;
+        });
+      } else if (type === 'label') {
+        // 切换标牌显示状态
+        showLabels.value = !showLabels.value;
+
+        // 更新省份标签可见性
+        provinceLabelsArray.forEach(label => {
+          label.visible = showLabels.value;
+        });
+
+        // 更新省份图标可见性
+        provinceIconsArray.forEach(icon => {
+          icon.visible = showLabels.value;
+        });
+      }
+    };
+
     onMounted(() => {
       initScene();
       loadChineseTypeface(); // 预加载中文typeface.json（若存在）
@@ -1753,17 +2033,65 @@ export default {
 
     return {
       container,
+      currentDataType,
+      dataTypes,
+      showPillars,
+      showLabels,
+      switchDataType,
     };
   },
 };
 </script>
 
 <style scoped>
+.china-3d-wrapper {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+}
+
 .china-3d-container {
   width: 100%;
   height: 100%;
   position: relative;
   overflow: hidden;
   background: radial-gradient(circle at center, #1a1a2e 0%, #0a0a0a 100%);
+}
+
+.control-panel {
+  position: absolute;
+  right: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  z-index: 10;
+}
+
+.control-btn {
+  padding: 12px 20px;
+  background: rgba(0, 0, 0, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  color: #ffffff;
+  font-size: 14px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.control-btn:hover {
+  background: rgba(0, 0, 0, 0.8);
+  border-color: rgba(255, 255, 255, 0.4);
+  transform: translateX(-2px);
+}
+
+.control-btn.active {
+  background: rgba(41, 182, 246, 0.8);
+  border-color: rgba(41, 182, 246, 1);
+  color: #ffffff;
 }
 </style>
