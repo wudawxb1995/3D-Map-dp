@@ -40,7 +40,8 @@
           :class="['control-btn', {
             active: item.value === 'pillar' ? showPillars :
                     item.value === 'label' ? showLabels :
-                    showFlylines
+                    item.value === 'flyline' ? showFlylines :
+                    showRipples
           }]"
           @click="switchDataType(item.value)"
         >
@@ -116,7 +117,8 @@ export default {
     const dataTypes = ref([
       { label: '光柱', value: 'pillar' },
       { label: '标牌', value: 'label' },
-      { label: '飞线', value: 'flyline' }
+      { label: '飞线', value: 'flyline' },
+      { label: '波纹', value: 'ripple' }
     ]);
 
     // 光柱显示状态控制
@@ -133,6 +135,15 @@ export default {
 
     // 脉冲辉光效果控制
     const pulseGlowEnabled = ref(false); // 是否启用脉冲辉光效果（默认不启用）
+
+    // 波纹相关变量
+    let ripplesArray = []; // 存储所有波纹
+    let rippleTimer = null; // 波纹定时器
+    
+    // 存储3D体块波纹的数组
+    let centerRipplesArray = []; // 存储中国地图中心波纹
+    let centerRippleTimer = null; // 中国地图中心波纹定时器
+    const showRipples = ref(false); // 是否显示波纹（默认不显示）
 
     // 本地 assets 下提供的中文 typeface.json 候选列表（存在其一即可）
     const CN_TYPEFACE_CANDIDATES = [
@@ -203,6 +214,33 @@ export default {
       pulseTailRadius: 20, // 脉冲尾部半径（后端，细尾）
       pulseTubeSegments: 16, // 管道圆周分段数
       pulseRadialSegments: 32, // 管道径向分段数
+    };
+
+    // 波纹配置
+    const RIPPLE_CONFIG = {
+      maxRadius: 50000, // 波纹最大半径（覆盖整个地图）
+      initialRadius: 100, // 初始半径
+      expansionSpeed: 800, // 扩散速度（单位/秒）
+      opacityDecay: 0.01, // 透明度衰减速度
+      color: 0x00bfff, // 波纹颜色（亮蓝色）
+      segments: 64, // 环形分段数
+      initialOpacity: 0.8, // 初始透明度
+      minOpacity: 0, // 最小透明度
+      interval: 3000, // 波纹触发间隔（毫秒）
+    };
+
+    // 基于中国地图中心的波纹配置
+    const CENTER_RIPPLE_CONFIG = {
+      maxRadius: 500000, // 中国地图中心波纹最大半径（覆盖整个地图）
+      initialRadius: 1000, // 初始半径
+      expansionSpeed: 100000, // 扩散速度（覆盖整个地图约5秒）
+      opacityDecay: 0.003, // 透明度衰减速度
+      color: 0x00ff88, // 中国地图中心波纹颜色（青绿色）
+      segments: 64, // 环形分段数（更平滑）
+      initialOpacity: 0.8, // 初始透明度
+      minOpacity: 0, // 最小透明度
+      interval: 3000, // 每3秒触发一次
+      heightOffset: 100, // 在地图上方100单位
     };
 
     // 初始化Three.js场景
@@ -1068,7 +1106,7 @@ export default {
         createPulse(curve, line.userData.startTime);
 
         // 创建目标点的波纹效果
-        createRipples(endPos);
+        createFlylineRipples(endPos);
       });
     };
 
@@ -1206,9 +1244,9 @@ export default {
      * 创建波纹效果
      * @param {THREE.Vector3} position - 波纹位置
      */
-    const createRipples = (position) => {
+    const createFlylineRipples = (position) => {
       for (let i = 0; i < FLYLINE_CONFIG.rippleCount; i++) {
-        const geometry = new THREE.RingGeometry(500, 4000, 32);
+        const geometry = new THREE.RingGeometry(500, 8000, 32);
         const material = new THREE.ShaderMaterial({
           transparent: true,
           depthTest: false,
@@ -1254,7 +1292,8 @@ export default {
         });
 
         const ripple = new THREE.Mesh(geometry, material);
-        ripple.position.copy(position);
+        // 创建独立的位置，不跟随原位置移动
+        ripple.position.set(position.x, position.y, position.z);
         ripple.rotation.x = -Math.PI / 2; // 水平放置
         ripple.renderOrder = 997;
         ripple.visible = showFlylines.value;
@@ -2060,9 +2099,287 @@ export default {
       controls.target.set(0, 0, 0); // 设置目标点为场景中心
     };
 
+    /**
+     * 创建基于中国地图中心的波纹效果
+     */
+    const createCenterRipple = (height = CENTER_RIPPLE_CONFIG.heightOffset) => {
+      // 创建中国地图中心位置的波纹
+      const position = new THREE.Vector3(0, 0, 0); // 中国地图中心坐标
+
+      // 创建多个波纹环（每个波纹在不同相位）
+      for (let i = 0; i < 3; i++) {
+        const geometry = new THREE.RingGeometry(
+          CENTER_RIPPLE_CONFIG.initialRadius,
+          CENTER_RIPPLE_CONFIG.initialRadius + 15000, // 更粗的环线
+          CENTER_RIPPLE_CONFIG.segments
+        );
+
+        const material = new THREE.MeshBasicMaterial({
+          color: CENTER_RIPPLE_CONFIG.color,
+          transparent: true,
+          opacity: CENTER_RIPPLE_CONFIG.initialOpacity * (1 - i * 0.3),
+          side: THREE.DoubleSide,
+        });
+
+        const ripple = new THREE.Mesh(geometry, material);
+
+        // 设置位置在中国地图中心的上方
+        ripple.position.set(position.x, height, position.z);
+        
+        // 设置波纹水平放置，与3D体块保持同样旋转方向
+        ripple.rotation.x = -Math.PI / 2;
+
+        // 波纹数据
+        ripple.userData = {
+          radius: CENTER_RIPPLE_CONFIG.initialRadius,
+          opacity: CENTER_RIPPLE_CONFIG.initialOpacity * (1 - i * 0.3),
+          phase: i * 0.2, // 相位偏移
+          active: true,
+          type: 'center', // 标识为中心波纹
+          startTime: Date.now()
+        };
+
+        centerRipplesArray.push(ripple);
+        scene.add(ripple);
+      }
+    };
+
+    /**
+     * 启动中国地图中心波纹定时器
+     */
+    const createCenterRippleAtInterval = () => {
+      createCenterRipple();
+    };
+
+    /**
+     * 启动中国地图中心波纹定时器
+     */
+    const startCenterRippleTimer = () => {
+      if (centerRippleTimer) {
+        clearInterval(centerRippleTimer);
+      }
+
+      // 每3秒触发一次波纹
+      centerRippleTimer = setInterval(() => {
+        createCenterRippleAtInterval();
+      }, CENTER_RIPPLE_CONFIG.interval);
+    };
+
+    /**
+     * 停止中国地图中心波纹定时器
+     */
+    const stopCenterRippleTimer = () => {
+      if (centerRippleTimer) {
+        clearInterval(centerRippleTimer);
+        centerRippleTimer = null;
+      }
+    };
+
+    /**
+     * 创建波纹效果
+     */
+    const createDefaultRipples = () => {
+      // 创建一个环形几何体作为波纹模板
+      const geometry = new THREE.RingGeometry(
+        RIPPLE_CONFIG.initialRadius,
+        RIPPLE_CONFIG.initialRadius + 400,
+        RIPPLE_CONFIG.segments
+      );
+
+      // 创建多个波纹（每个波纹在不同相位）
+      for (let i = 0; i < 5; i++) {
+        const material = new THREE.MeshBasicMaterial({
+          color: RIPPLE_CONFIG.color,
+          transparent: true,
+          opacity: RIPPLE_CONFIG.initialOpacity * (1 - i * 0.2), // 每个波纹透明度递减
+          side: THREE.DoubleSide,
+        });
+
+        const ripple = new THREE.Mesh(geometry.clone(), material);
+        
+        // 波纹数据
+        ripple.userData = {
+          radius: RIPPLE_CONFIG.initialRadius,
+          opacity: RIPPLE_CONFIG.initialOpacity * (1 - i * 0.2),
+          phase: i * 0.2, // 相位偏移，每个波纹有不同相位
+          active: false, // 是否活跃
+        };
+
+        // 设置波纹在地面（Y=0）？
+        ripple.position.set(0, 0, 0);
+        
+        // 设置波纹水平放置，与3D体块保持同样旋转方向
+        ripple.rotation.x = -Math.PI / 2;
+        
+        ripple.visible = false;
+        ripple.renderOrder = 10; // 确保在其他元素之上
+
+        ripplesArray.push(ripple);
+        scene.add(ripple);
+      }
+    };
+
+    /**
+     * 启动波纹效果
+     */
+    const startRippleEffect = () => {
+      if (rippleTimer) {
+        clearInterval(rippleTimer);
+      }
+
+      // 启动定时器，每3秒触发一次波纹
+      rippleTimer = setInterval(() => {
+        ripplesArray.forEach(ripple => {
+          // 重置波纹参数
+          ripple.userData.radius = RIPPLE_CONFIG.initialRadius;
+          ripple.userData.opacity = RIPPLE_CONFIG.initialOpacity;
+          ripple.userData.active = true;
+          ripple.visible = true;
+        });
+      }, RIPPLE_CONFIG.interval);
+
+      // 立即触发一次波纹
+      ripplesArray.forEach(ripple => {
+        ripple.userData.radius = RIPPLE_CONFIG.initialRadius;
+        ripple.userData.opacity = RIPPLE_CONFIG.initialOpacity;
+        ripple.userData.active = true;
+        ripple.visible = true;
+      });
+    };
+
+    /**
+     * 停止波纹效果
+     */
+    const stopRippleEffect = () => {
+      if (rippleTimer) {
+        clearInterval(rippleTimer);
+        rippleTimer = null;
+      }
+
+      // 隐藏所有波纹
+      ripplesArray.forEach(ripple => {
+        ripple.visible = false;
+        ripple.userData.active = false;
+      });
+    };
+
+    /**
+     * 更新波纹动画
+     * @param {number} deltaTime - 时间间隔（毫秒）
+     */
+    const updateRipples = (deltaTime) => {
+      const deltaSeconds = deltaTime / 1000; // 转换为秒
+
+      ripplesArray.forEach(ripple => {
+        if (ripple.userData.active) {
+          // 更新半径
+          ripple.userData.radius += RIPPLE_CONFIG.expansionSpeed * deltaSeconds;
+
+          // 更新透明度
+          const opacityDecrease = (RIPPLE_CONFIG.opacityDecay * deltaSeconds) * 
+                                  (ripple.userData.radius / RIPPLE_CONFIG.maxRadius);
+          ripple.userData.opacity = Math.max(
+            RIPPLE_CONFIG.minOpacity,
+            ripple.userData.opacity - opacityDecrease
+          );
+
+          // 更新几何体
+          const innerRadius = ripple.userData.radius;
+          const outerRadius = ripple.userData.radius + 100;
+
+          // 如果波纹超出最大范围或透明度过低，停止该波纹
+          if (ripple.userData.radius > RIPPLE_CONFIG.maxRadius || 
+              ripple.userData.opacity <= RIPPLE_CONFIG.minOpacity) {
+            ripple.userData.active = false;
+            ripple.visible = false;
+          } else {
+            // 重新创建几何体以更新半径
+            const newGeometry = new THREE.RingGeometry(
+              innerRadius,
+              outerRadius,
+              RIPPLE_CONFIG.segments
+            );
+
+            // 替换几何体
+            if (ripple.geometry) {
+              ripple.geometry.dispose();
+            }
+            ripple.geometry = newGeometry;
+
+            // 更新材质透明度
+            if (ripple.material) {
+              ripple.material.opacity = ripple.userData.opacity;
+            }
+          }
+        }
+      });
+    };
+
     // 动画循环
+    let lastTime = Date.now(); // 用于计算deltaTime
     const animate = () => {
       animationId.value = requestAnimationFrame(animate);
+      
+      const currentTime = Date.now();
+      const deltaTime = currentTime - lastTime;
+      lastTime = currentTime;
+
+      // 更新中国地图中心波纹动画
+      const deltaSeconds = deltaTime / 1000; // 转换为秒
+      centerRipplesArray.forEach(ripple => {
+        if (ripple.userData.active) {
+          // 更新半径
+          ripple.userData.radius += CENTER_RIPPLE_CONFIG.expansionSpeed * deltaSeconds;
+
+          // 更新透明度
+          const opacityDecrease = (CENTER_RIPPLE_CONFIG.opacityDecay * deltaSeconds) * 
+                                  (ripple.userData.radius / CENTER_RIPPLE_CONFIG.maxRadius);
+          ripple.userData.opacity = Math.max(
+            CENTER_RIPPLE_CONFIG.minOpacity,
+            ripple.userData.opacity - opacityDecrease
+          );
+
+          // 更新几何体
+          const innerRadius = ripple.userData.radius;
+          const outerRadius = ripple.userData.radius + 800;
+
+          // 如果波纹超出最大范围或透明度过低，停止该波纹
+          if (ripple.userData.radius > CENTER_RIPPLE_CONFIG.maxRadius || 
+              ripple.userData.opacity <= CENTER_RIPPLE_CONFIG.minOpacity) {
+            ripple.userData.active = false;
+            ripple.visible = false;
+          } else {
+            // 重新创建几何体以更新半径
+            const newGeometry = new THREE.RingGeometry(
+              innerRadius,
+              outerRadius,
+              CENTER_RIPPLE_CONFIG.segments
+            );
+
+            // 替换几何体
+            if (ripple.geometry) {
+              ripple.geometry.dispose();
+            }
+            ripple.geometry = newGeometry;
+
+            // 更新材质透明度
+            if (ripple.material) {
+              ripple.material.opacity = ripple.userData.opacity;
+            }
+          }
+        }
+      });
+
+      // 清理无效的波纹
+      centerRipplesArray = centerRipplesArray.filter(ripple => {
+        if (!ripple.userData.active) {
+          if (ripple.geometry) ripple.geometry.dispose();
+          if (ripple.material) ripple.material.dispose();
+          if (ripple.parent) ripple.parent.remove(ripple);
+          return false;
+        }
+        return true;
+      });
 
       // 更新轨道控制器
       if (controls) {
@@ -2386,6 +2703,20 @@ export default {
       });
       flylineRipplesArray = [];
 
+      // 清理中国地图中心波纹
+      centerRipplesArray.forEach((ripple) => {
+        scene.remove(ripple);
+        if (ripple.geometry) ripple.geometry.dispose();
+        if (ripple.material) ripple.material.dispose();
+      });
+      centerRipplesArray = [];
+
+      // 停止中国地图中心波纹定时器
+      if (centerRippleTimer) {
+        clearInterval(centerRippleTimer);
+        centerRippleTimer = null;
+      }
+
       if (renderer) {
         renderer.dispose();
       }
@@ -2395,8 +2726,8 @@ export default {
     };
 
     /**
-     * 切换数据类型（切换光柱、标牌或飞线显示/隐藏）
-     * @param {string} type - 数据类型（'pillar'、'label' 或 'flyline'）
+     * 切换数据类型（切换光柱、标牌、飞线或波纹显示/隐藏）
+     * @param {string} type - 数据类型（'pillar'、'label'、'flyline' 或 'ripple'）
      */
     const switchDataType = (type) => {
       currentDataType.value = type;
@@ -2450,6 +2781,26 @@ export default {
         flylineRipplesArray.forEach(ripple => {
           ripple.visible = showFlylines.value;
         });
+      } else if (type === 'ripple') {
+        // 切换波纹显示状态
+        showRipples.value = !showRipples.value;
+
+        // 如果是第一次显示波纹，需要创建波纹效果    
+        if (showRipples.value && centerRipplesArray.length === 0) {        
+          createDefaultRipples();
+        }
+
+        // 启动或停止波纹效果
+        if (showRipples.value) {
+          startCenterRippleTimer();
+        } else {
+          stopCenterRippleTimer();
+        }
+
+        // 更新波纹可见性
+        centerRipplesArray.forEach(ripple => {
+          ripple.visible = showRipples.value;
+        });
       }
     };
 
@@ -2493,6 +2844,7 @@ export default {
       showPillars,
       showLabels,
       showFlylines,
+      showRipples,
       pillarGlowEnabled,
       pulseGlowEnabled,
       switchDataType,
