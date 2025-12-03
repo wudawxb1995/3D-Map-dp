@@ -2106,42 +2106,83 @@ export default {
       // 创建中国地图中心位置的波纹
       const position = new THREE.Vector3(0, 0, 0); // 中国地图中心坐标
 
-      // 创建多个波纹环（每个波纹在不同相位）
-      for (let i = 0; i < 3; i++) {
-        const geometry = new THREE.RingGeometry(
-          CENTER_RIPPLE_CONFIG.initialRadius,
-          CENTER_RIPPLE_CONFIG.initialRadius + 15000, // 更粗的环线
-          CENTER_RIPPLE_CONFIG.segments
-        );
+      const out_radius = 5000
+      // 创建单个波纹环
+      const geometry = new THREE.RingGeometry(
+        CENTER_RIPPLE_CONFIG.initialRadius,
+        CENTER_RIPPLE_CONFIG.initialRadius + out_radius, // 更粗的环线
+        CENTER_RIPPLE_CONFIG.segments
+      );
 
-        const material = new THREE.MeshBasicMaterial({
-          color: CENTER_RIPPLE_CONFIG.color,
-          transparent: true,
-          opacity: CENTER_RIPPLE_CONFIG.initialOpacity * (1 - i * 0.3),
-          side: THREE.DoubleSide,
-        });
+      // 使用自定义着色器材质实现径向渐变透明效果
+      const material = new THREE.ShaderMaterial({
+        transparent: true,
+        depthTest: false,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        uniforms: {
+          color: { value: new THREE.Color(CENTER_RIPPLE_CONFIG.color) },
+          baseOpacity: { value: CENTER_RIPPLE_CONFIG.initialOpacity },
+          time: { value: 0 }, // 时间
+        },
+        vertexShader: `
+          varying vec2 vUv;
+          
+          void main() {
+            vUv = uv;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform vec3 color;
+          uniform float baseOpacity;
+          uniform float time;
+          varying vec2 vUv;
+          
+          void main() {
+            // 使用径向坐标计算渐变
+            // vUv.y 表示从内径(0)到外径(1)的渐变
+            float gradient = vUv.y;
+            
+            // 实现径向渐变透明效果
+            // 内径透明度高，外径透明度低
+            float radialOpacity = pow(1.0 - gradient, 2.0); // 使用平方函数让渐变更自然
+            
+            // 添加微妙的闪烁效果
+            float flicker = 0.95 + 0.05 * sin(time * 2.0);
+            
+            // 最终透明度 = 基础透明度 * 径向渐变 * 闪烁效果
+            float finalOpacity = baseOpacity * radialOpacity * flicker;
+            
+            // 确保透明度不会过低
+            finalOpacity = max(finalOpacity, 0.02);
+            
+            gl_FragColor = vec4(color, finalOpacity);
+          }
+        `
+      });
 
-        const ripple = new THREE.Mesh(geometry, material);
+      const ripple = new THREE.Mesh(geometry, material);
 
-        // 设置位置在中国地图中心的上方
-        ripple.position.set(position.x, height, position.z);
-        
-        // 设置波纹水平放置，与3D体块保持同样旋转方向
-        ripple.rotation.x = -Math.PI / 2;
+      // 设置位置在中国地图中心的上方
+      ripple.position.set(position.x, height, position.z);
+      
+      // 设置波纹水平放置，与3D体块保持同样旋转方向
+      ripple.rotation.x = -Math.PI / 2;
 
-        // 波纹数据
-        ripple.userData = {
-          radius: CENTER_RIPPLE_CONFIG.initialRadius,
-          opacity: CENTER_RIPPLE_CONFIG.initialOpacity * (1 - i * 0.3),
-          phase: i * 0.2, // 相位偏移
-          active: true,
-          type: 'center', // 标识为中心波纹
-          startTime: Date.now()
-        };
+      // 波纹数据
+      ripple.userData = {
+        radius: CENTER_RIPPLE_CONFIG.initialRadius,
+        opacity: CENTER_RIPPLE_CONFIG.initialOpacity,
+        active: true,
+        type: 'center', // 标识为中心波纹
+        startTime: Date.now(),
+        outRadius: out_radius,
+        time: 0 // 记录时间用于着色器动画
+      };
 
-        centerRipplesArray.push(ripple);
-        scene.add(ripple);
-      }
+      centerRipplesArray.push(ripple);
+      scene.add(ripple);
     };
 
     /**
@@ -2219,102 +2260,6 @@ export default {
       }
     };
 
-    /**
-     * 启动波纹效果
-     */
-    const startRippleEffect = () => {
-      if (rippleTimer) {
-        clearInterval(rippleTimer);
-      }
-
-      // 启动定时器，每3秒触发一次波纹
-      rippleTimer = setInterval(() => {
-        ripplesArray.forEach(ripple => {
-          // 重置波纹参数
-          ripple.userData.radius = RIPPLE_CONFIG.initialRadius;
-          ripple.userData.opacity = RIPPLE_CONFIG.initialOpacity;
-          ripple.userData.active = true;
-          ripple.visible = true;
-        });
-      }, RIPPLE_CONFIG.interval);
-
-      // 立即触发一次波纹
-      ripplesArray.forEach(ripple => {
-        ripple.userData.radius = RIPPLE_CONFIG.initialRadius;
-        ripple.userData.opacity = RIPPLE_CONFIG.initialOpacity;
-        ripple.userData.active = true;
-        ripple.visible = true;
-      });
-    };
-
-    /**
-     * 停止波纹效果
-     */
-    const stopRippleEffect = () => {
-      if (rippleTimer) {
-        clearInterval(rippleTimer);
-        rippleTimer = null;
-      }
-
-      // 隐藏所有波纹
-      ripplesArray.forEach(ripple => {
-        ripple.visible = false;
-        ripple.userData.active = false;
-      });
-    };
-
-    /**
-     * 更新波纹动画
-     * @param {number} deltaTime - 时间间隔（毫秒）
-     */
-    const updateRipples = (deltaTime) => {
-      const deltaSeconds = deltaTime / 1000; // 转换为秒
-
-      ripplesArray.forEach(ripple => {
-        if (ripple.userData.active) {
-          // 更新半径
-          ripple.userData.radius += RIPPLE_CONFIG.expansionSpeed * deltaSeconds;
-
-          // 更新透明度
-          const opacityDecrease = (RIPPLE_CONFIG.opacityDecay * deltaSeconds) * 
-                                  (ripple.userData.radius / RIPPLE_CONFIG.maxRadius);
-          ripple.userData.opacity = Math.max(
-            RIPPLE_CONFIG.minOpacity,
-            ripple.userData.opacity - opacityDecrease
-          );
-
-          // 更新几何体
-          const innerRadius = ripple.userData.radius;
-          const outerRadius = ripple.userData.radius + 100;
-
-          // 如果波纹超出最大范围或透明度过低，停止该波纹
-          if (ripple.userData.radius > RIPPLE_CONFIG.maxRadius || 
-              ripple.userData.opacity <= RIPPLE_CONFIG.minOpacity) {
-            ripple.userData.active = false;
-            ripple.visible = false;
-          } else {
-            // 重新创建几何体以更新半径
-            const newGeometry = new THREE.RingGeometry(
-              innerRadius,
-              outerRadius,
-              RIPPLE_CONFIG.segments
-            );
-
-            // 替换几何体
-            if (ripple.geometry) {
-              ripple.geometry.dispose();
-            }
-            ripple.geometry = newGeometry;
-
-            // 更新材质透明度
-            if (ripple.material) {
-              ripple.material.opacity = ripple.userData.opacity;
-            }
-          }
-        }
-      });
-    };
-
     // 动画循环
     let lastTime = Date.now(); // 用于计算deltaTime
     const animate = () => {
@@ -2326,26 +2271,24 @@ export default {
 
       // 更新中国地图中心波纹动画
       const deltaSeconds = deltaTime / 1000; // 转换为秒
+      
       centerRipplesArray.forEach(ripple => {
         if (ripple.userData.active) {
           // 更新半径
           ripple.userData.radius += CENTER_RIPPLE_CONFIG.expansionSpeed * deltaSeconds;
 
-          // 更新透明度
-          const opacityDecrease = (CENTER_RIPPLE_CONFIG.opacityDecay * deltaSeconds) * 
-                                  (ripple.userData.radius / CENTER_RIPPLE_CONFIG.maxRadius);
-          ripple.userData.opacity = Math.max(
-            CENTER_RIPPLE_CONFIG.minOpacity,
-            ripple.userData.opacity - opacityDecrease
-          );
+          // 更新着色器时间，用于闪烁动画
+          ripple.userData.time += deltaSeconds;
+          if (ripple.material.uniforms.time) {
+            ripple.material.uniforms.time.value = ripple.userData.time;
+          }
 
           // 更新几何体
           const innerRadius = ripple.userData.radius;
-          const outerRadius = ripple.userData.radius + 800;
+          const outerRadius = ripple.userData.radius + ripple.userData.outRadius;
 
-          // 如果波纹超出最大范围或透明度过低，停止该波纹
-          if (ripple.userData.radius > CENTER_RIPPLE_CONFIG.maxRadius || 
-              ripple.userData.opacity <= CENTER_RIPPLE_CONFIG.minOpacity) {
+          // 如果波纹超出最大范围，停止该波纹
+          if (ripple.userData.radius > CENTER_RIPPLE_CONFIG.maxRadius) {
             ripple.userData.active = false;
             ripple.visible = false;
           } else {
@@ -2361,11 +2304,6 @@ export default {
               ripple.geometry.dispose();
             }
             ripple.geometry = newGeometry;
-
-            // 更新材质透明度
-            if (ripple.material) {
-              ripple.material.opacity = ripple.userData.opacity;
-            }
           }
         }
       });
