@@ -8,7 +8,7 @@
 <script>
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import mapboxgl from 'mapbox-gl'
-import { MAP_CONFIG, MAP_CONTROLS } from '../config/mapConfig.js'
+import { MAP_CONFIG } from '../config/mapConfig.js'
 
 export default {
   name: 'BaseMap',
@@ -92,13 +92,13 @@ export default {
 
       // 导航控件
       if (props.showNavigation) {
-        const navControl = new mapboxgl.NavigationControl(MAP_CONTROLS.navigation)
+        const navControl = new mapboxgl.NavigationControl()
         mapInstance.value.addControl(navControl, 'top-right')
       }
 
       // 比例尺控件
       if (props.showScale) {
-        const scaleControl = new mapboxgl.ScaleControl(MAP_CONTROLS.scale)
+        const scaleControl = new mapboxgl.ScaleControl()
         mapInstance.value.addControl(scaleControl, 'bottom-left')
       }
     }
