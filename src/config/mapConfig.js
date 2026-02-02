@@ -34,7 +34,7 @@ export const MAP_CONFIG = {
     baseHeight: 15000,
     maxHeight: 25000,
     minHeight: 3000,
-    segments: 32,
+    segments: 16, // 从 32 降到 16，减少多边形数量
     labelOffsetY: 2000,
     labelFontSize: 3000,
     colorRanges: [
@@ -61,7 +61,7 @@ export const MAP_CONFIG = {
     rippleInterval: 0.33,
     pulseHeadRadius: 120,
     pulseTailRadius: 20,
-    pulseTubeSegments: 16,
+    pulseTubeSegments: 8, // 从 16 降到 8，减少管道段数
     pulseRadialSegments: 32,
   },
 
@@ -72,7 +72,7 @@ export const MAP_CONFIG = {
     expansionSpeed: 800,
     opacityDecay: 0.01,
     color: 0x00bfff,
-    segments: 64,
+    segments: 32, // 从 64 降到 32，减少多边形数量
     initialOpacity: 0.8,
     minOpacity: 0,
     interval: 3000,
@@ -85,7 +85,7 @@ export const MAP_CONFIG = {
     expansionSpeed: 100000,
     opacityDecay: 0.003,
     color: 0x00ff88,
-    segments: 64,
+    segments: 32, // 从 64 降到 32，减少多边形数量
     initialOpacity: 0.8,
     minOpacity: 0,
     interval: 3000,

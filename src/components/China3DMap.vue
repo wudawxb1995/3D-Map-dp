@@ -1,5 +1,32 @@
 <template>
   <div class="china-3d-wrapper">
+    <!-- 面包屑导航 -->
+    <div v-if="mapState.currentLevel !== 'country'" class="breadcrumb-nav">
+
+      <span class="breadcrumb-item" @click="backToLevel('country')">
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="margin-right: 4px; vertical-align: middle;">
+          <path d="M8 0L0 8l8 8 1.5-1.5L3 8l6.5-6.5L8 0z"/>
+        </svg>
+        全国
+      </span>
+      
+      <!-- 动态生成面包屑 -->
+      <template v-for="(item, index) in mapState.historyStack" :key="index">
+         <template v-if="item.level !== 'country'">
+            <span class="breadcrumb-separator">></span>
+            <span class="breadcrumb-item" @click="backToLevel(item.level)">
+              {{ item.name }}
+            </span>
+         </template>
+      </template>
+
+      <!-- 当前层级 -->
+      <span class="breadcrumb-separator">></span>
+      <span class="breadcrumb-item active">
+        {{ mapState.currentArea.name }}
+      </span>
+    </div>
+
     <div ref="container" class="china-3d-container"></div>
     <!-- 控制面板 -->
     <div class="control-panel">
@@ -90,6 +117,12 @@ import { MAP_CONFIG } from "@/config/mapConfig.js";
 // 导入工具函数
 import { mapUtils } from "@/utils/mapUtils.js";
 
+// 导入下钻功能相关模块
+import { provinceCodeMap, getProvinceCode, isSupportedForDrillDown, isMunicipality } from "@/config/provinceCodeMap.js";
+import mapDataLoader from "@/utils/mapDataLoader.js";
+import { mapAnimations } from "@/utils/mapAnimations.js";
+import Stats from "three/examples/jsm/libs/stats.module.js";
+
 export default {
   name: "China3DMap",
   components: {
@@ -102,8 +135,14 @@ export default {
   setup() {
     const container = ref(null);
     let scene, camera, renderer, composer;
+    let stats; // 性能监控
     let provinces = [];
     const animationId = ref(null);
+
+    // 存储全国范围 Bounds，用于下钻后的 UV 映射
+    let globalBounds = null;
+    // 存储需要动画的材质列表
+    let animatedMaterials = [];
     let bloomPass = null;
 
     // 射线拾取相关变量
@@ -111,6 +150,12 @@ export default {
     let mouse = new THREE.Vector2();
     let hoveredMesh = null;
     let hoveredProvinceName = null;
+
+    // 拖动检测相关变量
+    let mouseDownPosition = { x: 0, y: 0 };
+    let mouseUpPosition = { x: 0, y: 0 };
+    let isDragging = false;
+    const DRAG_THRESHOLD = 5; // 像素阈值，超过此距离视为拖动
 
     // 3D文字标签相关变量
     let currentTextLabel = null;
@@ -179,6 +224,28 @@ export default {
     // 使用导入的配置
     const CENTER_RIPPLE_CONFIG = MAP_CONFIG.CENTER_RIPPLE_CONFIG;
 
+    // ========== 地图下钻功能相关变量 ==========
+    // 地图层级状态
+    const mapState = ref({
+      currentLevel: 'country',        // 'country' | 'province' | 'city'
+      historyStack: [],               // 导航历史栈 { level, name, code, cameraPos, cameraTarget }
+      currentArea: {
+        code: null,
+        name: null
+      },
+      isTransitioning: false
+    });
+
+    // 当前加载的地理数据（用于在不同层级间切换）
+    let currentGeoData = chinaData;
+    let currentBorderData = chinaBorderData;
+
+    // 存储全国视图的相机位置（用于返回）
+    let countryViewCameraPosition = null;
+    let countryViewCameraTarget = null;
+
+    // ========== 下钻功能相关方法将在后续添加 ==========
+
     // 初始化场景
     const initScene = () => {
       const width = container.value.clientWidth;
@@ -202,20 +269,40 @@ export default {
         antialias: true,
         alpha: false,
         powerPreference: "high-performance",
+        stencil: false, // 禁用模板缓冲
+        depth: true,
       });
       renderer.setSize(width, height);
       renderer.shadowMap.enabled = false;
       renderer.setClearColor(0x0a0a0a, 1);
-      renderer.sortObjects = true;
-
+      // 限制像素比率以提升性能
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       container.value.appendChild(renderer.domElement);
+
+      // 初始化性能监控
+      stats = new Stats();
+      stats.dom.style.position = 'absolute';
+      stats.dom.style.top = '10px';
+      stats.dom.style.left = 'auto';
+      stats.dom.style.right = '10px';
+      stats.dom.style.zIndex = '9999';
+      stats.dom.style.width = '120px';
+      stats.dom.style.height = '96px';
+      // 设置 canvas 的缩放以适应容器
+      const canvas = stats.dom.querySelector('canvas');
+      if (canvas) {
+        canvas.style.width = '120px';
+        canvas.style.height = '96px';
+      }
+      container.value.appendChild(stats.dom);
 
       composer = new EffectComposer(renderer);
       const renderPass = new RenderPass(scene, camera);
       composer.addPass(renderPass);
 
+      // 降低 Bloom 分辨率以提升性能
       bloomPass = new UnrealBloomPass(
-        new THREE.Vector2(width * 0.5, height * 0.5),
+        new THREE.Vector2(width * 0.3, height * 0.3), // 从 0.5 降到 0.3
         0.5,
         0.2,
         0.88
@@ -315,6 +402,7 @@ export default {
       });
 
       const bounds = calculateBounds(allCoords);
+      globalBounds = bounds;
       const centerX = (bounds.minX + bounds.maxX) / 2;
       const centerY = (bounds.minY + bounds.maxY) / 2;
       const center = { x: centerX, y: centerY };
@@ -408,6 +496,7 @@ export default {
           name: provinceName,
           originalPosition: mesh.position.clone(),
           isHovered: false,
+          level: 'country' // 标识当前层级为全国下的省份
         };
 
         mesh.rotation.x = -Math.PI / 2;
@@ -856,7 +945,7 @@ export default {
           transparent: true,
           opacity: 0.85,
           depthTest: true,
-          depthWrite: true,
+          depthWrite: false,
         });
 
         const labelSprite = new THREE.Sprite(labelMaterial);
@@ -953,7 +1042,7 @@ export default {
         baseHeight,
       };
 
-      if (!cnFont) {
+      if (!cnFont || !text) {
         return;
       }
 
@@ -1476,14 +1565,639 @@ export default {
       tryLoad();
     };
 
+    // ========== 地图下钻核心逻辑 ==========
+
+    // 点击地图区域逻辑
+    const onProvinceClick = async (event) => {
+      if (mapState.value.isTransitioning) return;
+
+      // 检查是否为拖动操作
+      const deltaX = Math.abs(mouseUpPosition.x - mouseDownPosition.x);
+      const deltaY = Math.abs(mouseUpPosition.y - mouseDownPosition.y);
+      const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+
+      // 如果移动距离超过阈值，认为是拖动，不触发点击
+      if (distance > DRAG_THRESHOLD) {
+        console.log('检测到拖动操作，取消点击事件');
+        return;
+      }
+
+      const rect = container.value.getBoundingClientRect();
+      mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+      raycaster.setFromCamera(mouse, camera);
+
+      const allMeshes = provinces.flatMap((p) => p.meshes);
+      const intersects = raycaster.intersectObjects(allMeshes);
+
+      if (intersects.length > 0) {
+        const mesh = intersects[0].object;
+        const regionName = mesh.userData.name;
+        
+        console.log(`点击区域: ${regionName}, 当前层级: ${mapState.value.currentLevel}`);
+        
+        handleDrillDown(regionName, mesh.userData);
+      }
+    };
+
+    // 处理下钻逻辑
+    const handleDrillDown = async (name, userData) => {
+      if (mapState.value.currentLevel === 'country') {
+        // 全局视图 -> 省级视图
+        await drillToProvince(name);
+      } else if (mapState.value.currentLevel === 'province') {
+        // 省级视图 -> 市级/区县视图
+        await drillToCity(name, userData);
+      } else {
+        console.log('已到达最底层级，无法继续下钻');
+      }
+    };
+
+    // 下钻到省份
+    const drillToProvince = async (provinceName) => {
+      const provinceCode = getProvinceCode(provinceName);
+      if (!provinceCode) {
+        console.warn('未找到省份代码:', provinceName);
+        return;
+      }
+
+      if (!isSupportedForDrillDown(provinceCode)) {
+        console.warn('该区域暂不支持下钻:', provinceName);
+        return;
+      }
+
+      console.log(`下钻到省份: ${provinceName} (${provinceCode})`);
+      
+      // 加载省份数据
+      const provinceData = await mapDataLoader.loadProvinceData(provinceCode);
+      if (!provinceData) return;
+
+      // 记录历史
+      pushHistory();
+
+      // 执行切换
+      await performTransition(provinceName, provinceCode, provinceData, 'province');
+    };
+
+    // 下钻到城市/区县
+    const drillToCity = async (cityName, userData) => {
+      // 这里的 cityName 可能是 "郑州市" 或 "密云区" (直辖市情况)
+      // 如果当前是直辖市，通常不再下钻
+      const currentProvinceCode = mapState.value.currentArea.code;
+      if (isMunicipality(currentProvinceCode)) {
+        console.log('直辖市无需进一步下钻');
+        return;
+      }
+
+      // 获取城市代码
+      // 在 geometryProvince 的 JSON 中，properties 只有 id (数字) 和 name
+      // 例如 41.json 中 郑州市 id: 4101
+      // 这里我们需要从 userData 或其他地方获取代码，或者遍历当前 geoData 查找 code
+      let cityCode = userData.code; 
+      
+      // 如果 userData 没存 code，尝试从 currentGeoData 中找
+      if (!cityCode && currentGeoData) {
+         const feature = currentGeoData.features.find(f => f.properties.name === cityName);
+         if (feature && feature.properties.id) {
+           cityCode = feature.properties.id; // e.g. 4101
+         }
+      }
+
+      if (!cityCode) {
+        console.warn('未找到城市代码:', cityName);
+        return;
+      }
+
+      console.log(`下钻到城市: ${cityName} (${cityCode})`);
+
+      // 加载城市数据
+      const cityData = await mapDataLoader.loadCityData(cityCode);
+      if (!cityData) {
+        console.warn(`未找到城市数据文件: ${cityCode}00.json`);
+        return;
+      }
+
+      // 记录历史
+      pushHistory();
+
+      // 执行切换
+      await performTransition(cityName, cityCode, cityData, 'city');
+    };
+
+    // 通用切换执行函数
+    const performTransition = async (name, code, data, nextLevel) => {
+      mapState.value.isTransitioning = true;
+      try {
+        // 1. 淡出当前场景对象
+        const objectsToFadeOut = [];
+        provinces.forEach(p => objectsToFadeOut.push(...p.group.children));
+        provinceIconsArray.forEach(icon => objectsToFadeOut.push(icon));
+        lightPillarsArray.forEach(p => objectsToFadeOut.push(p));
+        // ...其他特效对象
+        
+        await mapAnimations.fadeOut(objectsToFadeOut, 500);
+
+        // 2. 清理旧资源
+        clearCurrentMapMeshes();
+
+        // 3. 渲染新地图
+        renderRegionMap(data, nextLevel);
+
+        // 4. 更新状态
+        mapState.value.currentLevel = nextLevel;
+        mapState.value.currentArea = { name, code };
+        currentGeoData = data;
+        
+        // 5. 控制器归位
+        controls.target.set(0, 0, 0);
+        controls.update();
+
+        // 6. 淡入新对象
+        const newObjects = [];
+        provinces.forEach(p => newObjects.push(...p.group.children));
+        provinceIconsArray.forEach(icon => newObjects.push(icon));
+        await mapAnimations.fadeIn(newObjects, 400);
+
+      } catch(e) {
+        console.error("Transition failed", e);
+      } finally {
+        mapState.value.isTransitioning = false;
+      }
+    };
+
+    // 记录历史状态
+    const pushHistory = () => {
+      mapState.value.historyStack.push({
+        level: mapState.value.currentLevel,
+        name: mapState.value.currentArea.name,
+        code: mapState.value.currentArea.code,
+        cameraPos: camera.position.clone(),
+        target: controls.target.clone(),
+        data: currentGeoData // 保存数据引用以便快速恢复
+      });
+    };
+
+    // 返回逻辑
+    const backToLevel = async (targetLevel) => {
+       if (mapState.value.isTransitioning) return;
+       
+       // 找到目标在栈中的位置
+       // 如果 targetLevel 是 'country'，则回退到最开始
+       // 简单起见，我们只支持 popBack (返回上一级)，或者根据栈查找
+       
+       // 如果栈为空或当前就是目标层级，不处理
+       if (mapState.value.historyStack.length === 0) return;
+
+       mapState.value.isTransitioning = true;
+
+       try {
+         // 获取上一级状态
+         const history = mapState.value.historyStack.pop();
+         // 如果需要支持跳级返回，可能需要多次 pop 或者重构 historyStack 管理
+         
+         // 1. 淡出
+         const objectsToFadeOut = [];
+         provinces.forEach(p => objectsToFadeOut.push(...p.group.children));
+         provinceIconsArray.forEach(icon => objectsToFadeOut.push(icon));
+         await mapAnimations.fadeOut(objectsToFadeOut, 300);
+
+         // 2. 恢复相机
+         if (history.cameraPos && history.target) {
+            await mapAnimations.moveCamera(camera, history.cameraPos, history.target, 800);
+            controls.target.copy(history.target);
+         }
+
+         // 3. 清理
+         clearCurrentMapMeshes();
+
+         // 4. 恢复渲染
+         if (history.level === 'country') {
+            processGeoData(); // 重新渲染全国
+            currentGeoData = chinaData;
+         } else {
+            // 恢复之前的数据
+            renderRegionMap(history.data, history.level);
+            currentGeoData = history.data;
+         }
+
+         // 5. 恢复状态
+         mapState.value.currentLevel = history.level;
+         mapState.value.currentArea = { name: history.name, code: history.code };
+         
+         // 6. 淡入
+         const newObjects = [];
+         provinces.forEach(p => newObjects.push(...p.group.children));
+         provinceIconsArray.forEach(icon => newObjects.push(icon));
+         await mapAnimations.fadeIn(newObjects, 400);
+
+       } catch(e) {
+         console.error("Back failed", e);
+       } finally {
+         mapState.value.isTransitioning = false;
+       }
+    };
+
+    // 兼容模板中的 backToCountry 调用
+    const backToCountry = () => backToLevel('country');
+
+    // 渲染区域地图 (省或市)
+    const renderRegionMap = (geoData, level) => {
+      const allCoords = [];
+      geoData.features.forEach((feature) => {
+        if (feature.geometry.type === "Polygon") {
+          feature.geometry.coordinates.forEach((polygon) => {
+            allCoords.push(...coordinatesToMercator(polygon));
+          });
+        } else if (feature.geometry.type === "MultiPolygon") {
+          feature.geometry.coordinates.forEach((multi) => {
+            multi.forEach((polygon) => {
+              allCoords.push(...coordinatesToMercator(polygon));
+            });
+          });
+        }
+      });
+
+      const bounds = calculateBounds(allCoords);
+      const centerX = (bounds.minX + bounds.maxX) / 2;
+      const centerY = (bounds.minY + bounds.maxY) / 2;
+      const center = { x: centerX, y: centerY };
+
+      // 动态计算缩放比例
+      const scale = 120000 / Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
+
+      const textureLoader = new THREE.TextureLoader();
+      const chinaTexture = textureLoader.load("/src/assets/image/home/quanGuo.png");
+
+      // 渲染每个区域
+      geoData.features.forEach((feature) => {
+        createRegionMesh(feature, center, scale, bounds, chinaTexture, level);
+      });
+
+      // 创建区域标签
+      createRegionLabels(geoData, center, scale, level);
+    };
+
+    // 创建区域MESH (复用原createCountyMesh但更通用)
+    const createRegionMesh = (feature, center, scale, bounds, texture, level) => {
+      const provinceGroup = new THREE.Group();
+      const name = feature.properties.name;
+      // 尝试获取 id 作为 code (用于下一步下钻)
+      const code = feature.properties.id; 
+      
+      const actualExtrudeHeight = 15000;
+
+      let geometries = [];
+      let borderCoordinates = [];
+
+      if (feature.geometry.type === "Polygon") {
+        geometries = feature.geometry.coordinates.map((polygon) => {
+          const coords = coordinatesToMercator(polygon);
+          const normalized = normalizeCoordinates(coords, center);
+          borderCoordinates.push(normalized);
+          return createShapeGeometry(normalized, scale);
+        });
+      } else if (feature.geometry.type === "MultiPolygon") {
+        feature.geometry.coordinates.forEach((multi) => {
+          multi.forEach((polygon) => {
+            const coords = coordinatesToMercator(polygon);
+            const normalized = normalizeCoordinates(coords, center);
+            borderCoordinates.push(normalized);
+            geometries.push(createShapeGeometry(normalized, scale));
+          });
+        });
+      }
+
+      const mapWidth = (bounds.maxX - bounds.minX) * scale;
+      const mapHeight = (bounds.maxY - bounds.minY) * scale;
+      
+      const globalWidth = globalBounds.maxX - globalBounds.minX;
+      const globalHeight = globalBounds.maxY - globalBounds.minY;
+
+      geometries.forEach((geometry) => {
+        // ... (保持原有的UV逻辑，使用全局globalBounds) ...
+        const shapeGeometry = new THREE.ShapeGeometry(geometry);
+        const positions = shapeGeometry.attributes.position;
+        const uvs = new Float32Array(positions.count * 2);
+
+        for (let i = 0; i < positions.count; i++) {
+          const x = positions.getX(i);
+          const y = positions.getY(i);
+          const mercatorX = x / scale + center.x;
+          const mercatorY = y / scale + center.y;
+          uvs[i * 2] = (mercatorX - globalBounds.minX) / globalWidth;
+          uvs[i * 2 + 1] = (mercatorY - globalBounds.minY) / globalHeight;
+        }
+
+        shapeGeometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+
+        const topMaterial = new THREE.MeshPhongMaterial({
+          map: texture,
+          color: 0xffffff,
+          transparent: true,
+          opacity: 0, 
+          depthWrite: true,
+          depthTest: true,
+          side: THREE.DoubleSide,
+        });
+
+        const topMesh = new THREE.Mesh(shapeGeometry, topMaterial);
+        topMesh.renderOrder = 2;
+        topMesh.userData = {
+          name: name,
+          code: code,
+          level: level, // 标识层级
+          originalPosition: topMesh.position.clone(),
+          isHovered: false
+        };
+
+        topMesh.rotation.x = -Math.PI / 2;
+        topMesh.position.y = actualExtrudeHeight + 10;
+        provinceGroup.add(topMesh);
+
+        // 创建侧面 Mesh
+        const extrudeSettings = {
+          depth: actualExtrudeHeight,
+          bevelEnabled: false,
+        };
+        const extrudeGeometry = new THREE.ExtrudeGeometry(geometry, extrudeSettings);
+        
+        const uvAttribute = extrudeGeometry.attributes.uv;
+        const positionAttribute = extrudeGeometry.attributes.position;
+        const normalAttribute = extrudeGeometry.attributes.normal;
+
+        for (let i = 0; i < positionAttribute.count; i++) {
+            const normal = new THREE.Vector3(
+                normalAttribute.getX(i),
+                normalAttribute.getY(i),
+                normalAttribute.getZ(i)
+            );
+            if (Math.abs(normal.z) < 0.99) {
+                const z = positionAttribute.getZ(i);
+                const v = z / extrudeSettings.depth;
+                uvAttribute.setY(i, v);
+            }
+        }
+        uvAttribute.needsUpdate = true;
+
+        const sideMaterial = new THREE.ShaderMaterial({
+          side: THREE.DoubleSide,
+          transparent: true,
+          depthTest: false,
+          uniforms: {
+            time: { value: 0.0 },
+            num: { value: 2.0 },
+            color1: { value: new THREE.Color("#266e85") }, 
+            brightness: { value: 0.8 },
+            uOpacity: { value: 0.0 } 
+          },
+          vertexShader: `
+            varying vec2 vUv;
+            varying vec3 vNormal;
+            varying vec3 vPosition;
+            void main() {
+              vUv = uv;
+              vNormal = normal;
+              vPosition = position;
+              gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+            }`,
+          fragmentShader: `
+            uniform vec3 color1;
+            uniform float time;
+            uniform float num;
+            uniform float brightness;
+            uniform float uOpacity; 
+            varying vec2 vUv;
+            varying vec3 vNormal;
+            void main() {
+              if(vNormal.z > 0.9 || vNormal.z < -0.9) {
+                discard;
+              }
+              float wave = fract(vUv.y + time);
+              float bands = fract(wave * num);
+              float alpha = (1.0 - bands) * 0.6;
+              alpha = alpha * uOpacity;
+              vec3 finalColor = color1 * brightness;
+              gl_FragColor = vec4(finalColor, alpha);
+            }`
+        });
+
+        // 绑定材质属性
+        Object.defineProperty(sideMaterial, 'opacity', {
+          get: function() { return this.uniforms.uOpacity.value; },
+          set: function(v) { this.uniforms.uOpacity.value = v; }
+        });
+        
+        animatedMaterials.push(sideMaterial);
+
+        const sideMesh = new THREE.Mesh(extrudeGeometry, sideMaterial);
+        sideMesh.rotation.x = -Math.PI / 2;
+        sideMesh.position.y = 0; 
+        sideMesh.renderOrder = 1; 
+        sideMesh.userData = { level: level };
+        
+        provinceGroup.add(sideMesh);
+      });
+
+      // 添加边界线
+      borderCoordinates.forEach((coordinates) => {
+         const positions = [];
+         coordinates.forEach(c => positions.push(c[0]*scale, c[1]*scale, 10));
+         const lineGeo = new LineGeometry();
+         lineGeo.setPositions(positions);
+         const lineMat = new LineMaterial({ 
+             color: 0x70b2bd, linewidth: 2.2, transparent: true, opacity: 0,
+             depthWrite: false, depthTest: false
+         });
+         lineMat.resolution.set(container.value.clientWidth, container.value.clientHeight);
+         const line = new Line2(lineGeo, lineMat);
+         line.rotation.x = -Math.PI/2;
+         line.position.y = actualExtrudeHeight + 10;
+         line.renderOrder = 3;
+         if(!scene.userData.lineMaterials) scene.userData.lineMaterials = [];
+         scene.userData.lineMaterials.push(lineMat);
+         provinceGroup.add(line);
+      });
+
+      scene.add(provinceGroup);
+      provinces.push({
+        group: provinceGroup,
+        meshes: provinceGroup.children.filter(c => c.type === "Mesh" && c.geometry),
+        name: name
+      });
+    };
+
+    // 创建区域标签 (简化版)
+    const createRegionLabels = (data, center, scale, level) => {
+        // 清理旧图标
+        provinceDataArray = [];
+        provinceIconsArray = [];
+        
+        const textureLoader = new THREE.TextureLoader();
+        textureLoader.load("/src/assets/image/home/icon.png", (texture) => {
+            data.features.forEach(feature => {
+                const name = feature.properties.name;
+                const pos = calculateProvinceCenterFromGeometry(feature.geometry, center, scale);
+                
+                provinceDataArray.push({ name, data: '0', position: pos });
+                
+                const mat = new THREE.SpriteMaterial({
+                    map: texture, transparent: true, opacity: 0,
+                    depthTest: false, depthWrite: false
+                });
+                const sprite = new THREE.Sprite(mat);
+                sprite.scale.set(ICON_CONFIG.iconSize, ICON_CONFIG.iconSize, 1);
+                sprite.position.copy(pos);
+                sprite.renderOrder = 100;
+                sprite.visible = showLabels.value;
+                scene.add(sprite);
+                provinceIconsArray.push(sprite);
+            });
+            // 可以在这里恢复文字标签...
+            createProvinceLabels();
+        });
+    };
+
+    // 清除当前地图的所有MESH
+    const clearCurrentMapMeshes = () => {
+      // 移除省份/区县 MESH
+      provinces.forEach((province) => {
+        province.group.children.forEach((child) => {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) {
+              child.material.forEach((mat) => mat.dispose());
+            } else {
+              child.material.dispose();
+            }
+          }
+        });
+        scene.remove(province.group);
+      });
+      provinces.length = 0;
+
+      // 移除图标
+      provinceIconsArray.forEach((icon) => {
+        if (icon.material) icon.material.dispose();
+        scene.remove(icon);
+      });
+      provinceIconsArray.length = 0;
+
+      // 移除标签
+      provinceLabelsArray.forEach((label) => {
+        if (label.material) label.material.dispose();
+        scene.remove(label);
+      });
+      provinceLabelsArray.length = 0;
+      
+      // 移除边界线 (borderLines)
+      if (scene.userData.borderLines) {
+        scene.userData.borderLines.forEach(item => {
+          if (item.geometry) item.geometry.dispose();
+          if (item.material) item.material.dispose();
+          scene.remove(item.line);
+        });
+        scene.userData.borderLines = [];
+      }
+      
+      // 移除国界侧面 (borderGroups)
+       if (scene.userData.borderGroups) {
+        scene.userData.borderGroups.forEach(group => {
+           group.children.forEach(child => {
+             if (child.geometry) child.geometry.dispose();
+             if (child.material) {
+               if (Array.isArray(child.material)) {
+                 child.material.forEach(m => m.dispose());
+               } else {
+                 child.material.dispose();
+               }
+             }
+           });
+           scene.remove(group);
+        });
+        scene.userData.borderGroups = [];
+      }
+      
+      // 移除光柱
+      if (lightPillarsArray.length > 0) {
+        lightPillarsArray.forEach(pillar => {
+           // 清理光柱及其子元素
+           pillar.children.forEach(child => {
+             if (child.geometry) child.geometry.dispose();
+             if (child.material) child.material.dispose();
+           });
+           scene.remove(pillar);
+        });
+        lightPillarsArray.length = 0;
+      }
+      
+      // 移除飞线和波纹
+       if (flylinesArray.length > 0) {
+         flylinesArray.forEach(line => {
+           if (line.geometry) line.geometry.dispose();
+           if (line.material) line.material.dispose();
+           scene.remove(line);
+         });
+         flylinesArray.length = 0;
+       }
+       
+       if (flylineRipplesArray.length > 0) {
+         flylineRipplesArray.forEach(r => {
+           if (r.geometry) r.geometry.dispose();
+           if (r.material) r.material.dispose();
+           scene.remove(r);
+         });
+         flylineRipplesArray.length = 0;
+       }
+       
+       if (flylinePulsesArray.length > 0) {
+         flylinePulsesArray.forEach(p => {
+           if (p.geometry) p.geometry.dispose();
+           if (p.material) p.material.dispose();
+           scene.remove(p);
+         });
+         flylinePulsesArray.length = 0;
+       }
+    };
+
+
     // 添加事件监听器
     const addEventListeners = () => {
+      container.value.addEventListener("mousedown", onMouseDown);
+      container.value.addEventListener("mouseup", onMouseUp);
       container.value.addEventListener("mousemove", onMouseMove);
       container.value.addEventListener("mouseleave", onMouseLeave);
+      container.value.addEventListener("click", onProvinceClick);
       window.addEventListener("resize", onWindowResize);
     };
 
-    // 鼠标移动事件
+    /**
+     * 鼠标按下事件 - 记录起始位置
+     */
+    const onMouseDown = (event) => {
+      mouseDownPosition.x = event.clientX;
+      mouseDownPosition.y = event.clientY;
+      isDragging = false;
+    };
+
+    /**
+     * 鼠标松开事件 - 记录结束位置
+     */
+    const onMouseUp = (event) => {
+      mouseUpPosition.x = event.clientX;
+      mouseUpPosition.y = event.clientY;
+      
+      // 计算移动距离判断是否为拖动
+      const deltaX = Math.abs(mouseUpPosition.x - mouseDownPosition.x);
+      const deltaY = Math.abs(mouseUpPosition.y - mouseDownPosition.y);
+      const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+      
+      isDragging = distance > DRAG_THRESHOLD;
+    };
+
+    /**
+     * 鼠标移动事件
+     */
     const onMouseMove = (event) => {
       const rect = container.value.getBoundingClientRect();
       mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
@@ -1770,6 +2484,19 @@ export default {
 
       const deltaSeconds = deltaTime / 1000;
       
+      // 更新自定义动画材质
+      animatedMaterials.forEach((material) => {
+        if (material.uniforms && material.uniforms.time) {
+           material.uniforms.time.value += deltaSeconds; // 使用真实 deltaSeconds 更平滑
+        }
+      });
+      
+      // 优化中心波纹更新 - 减少几何体重建频率
+      if (!scene.userData.rippleUpdateCounter) {
+        scene.userData.rippleUpdateCounter = 0;
+      }
+      scene.userData.rippleUpdateCounter++;
+      
       centerRipplesArray.forEach(ripple => {
         if (ripple.userData.active) {
           ripple.userData.radius += CENTER_RIPPLE_CONFIG.expansionSpeed * deltaSeconds;
@@ -1784,7 +2511,8 @@ export default {
           if (ripple.userData.radius > CENTER_RIPPLE_CONFIG.maxRadius) {
             ripple.userData.active = false;
             ripple.visible = false;
-          } else {
+          } else if (scene.userData.rippleUpdateCounter % 2 === 0) {
+            // 每2帧更新一次几何体，而不是每帧
             const newGeometry = new THREE.RingGeometry(
               innerRadius,
               outerRadius,
@@ -1877,7 +2605,8 @@ export default {
         }
 
         scene.userData.borderLineFrameCount++;
-        if (scene.userData.borderLineFrameCount % 3 === 0) {
+        // 从每3帧更新改为每5帧更新，减少计算频率
+        if (scene.userData.borderLineFrameCount % 5 === 0) {
           scene.userData.borderLines.forEach((borderLine) => {
             borderLine.startIndex += 2;
 
@@ -1922,6 +2651,12 @@ export default {
         }
       }
 
+      // 优化飞线脉冲更新 - 减少几何体重建频率
+      if (!scene.userData.pulseUpdateCounter) {
+        scene.userData.pulseUpdateCounter = 0;
+      }
+      scene.userData.pulseUpdateCounter++;
+      
       flylinePulsesArray.forEach(pulse => {
         if (!pulse.userData) return;
 
@@ -1932,7 +2667,8 @@ export default {
         }
 
         const curve = pulse.userData.curve;
-        if (curve) {
+        // 每2帧更新一次几何体，而不是每帧
+        if (curve && scene.userData.pulseUpdateCounter % 2 === 0) {
           const progress = (pulse.userData.progress + pulse.userData.startTime) % 1;
           const pulseLength = FLYLINE_CONFIG.pulseLength;
           const startProgress = Math.max(0, progress - pulseLength);
@@ -1997,6 +2733,11 @@ export default {
         }
       });
 
+      // 更新性能监控
+      if (stats) {
+        stats.update();
+      }
+
       composer.render();
     };
 
@@ -2010,9 +2751,18 @@ export default {
         controls.dispose();
       }
 
+      // 清理性能监控
+      if (stats && stats.dom && container.value) {
+        container.value.removeChild(stats.dom);
+        stats = null;
+      }
+
       if (container.value) {
+        container.value.removeEventListener("mousedown", onMouseDown);
+        container.value.removeEventListener("mouseup", onMouseUp);
         container.value.removeEventListener("mousemove", onMouseMove);
         container.value.removeEventListener("mouseleave", onMouseLeave);
+        container.value.removeEventListener("click", onProvinceClick);
       }
       window.removeEventListener("resize", onWindowResize);
 
@@ -2143,6 +2893,9 @@ export default {
       showRipples,
       pillarGlowEnabled,
       pulseGlowEnabled,
+      mapState,
+      backToLevel,
+      backToCountry,
       switchDataType,
       togglePillarGlow,
       togglePulseGlow,
@@ -2165,6 +2918,57 @@ export default {
   position: relative;
   overflow: hidden;
   background: radial-gradient(circle at center, #1a1a2e 0%, #0a0a0a 100%);
+}
+
+/* 面包屑导航样式 */
+.breadcrumb-nav {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #70b2bd;
+  background: rgba(10, 10, 10, 0.85);
+  padding: 10px 18px;
+  border-radius: 6px;
+  border: 1px solid #70b2bd;
+  backdrop-filter: blur(10px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  transition: all 0.3s ease;
+}
+
+.breadcrumb-nav:hover {
+  border-color: #94e7f5;
+  box-shadow: 0 4px 16px rgba(112, 178, 189, 0.3);
+}
+
+.breadcrumb-item {
+  cursor: pointer;
+  transition: color 0.3s, transform 0.2s;
+  display: inline-flex;
+  align-items: center;
+  font-weight: 500;
+}
+
+.breadcrumb-item:hover:not(.active) {
+  color: #94e7f5;
+  transform: translateX(-2px);
+}
+
+.breadcrumb-item.active {
+  color: #94e7f5;
+  cursor: default;
+  font-weight: 600;
+}
+
+.breadcrumb-separator {
+  color: #70b2bd;
+  opacity: 0.6;
+  margin: 0 4px;
+  user-select: none;
 }
 
 .control-panel {
