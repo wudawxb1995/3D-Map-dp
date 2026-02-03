@@ -2,13 +2,20 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
 
-// 自定义插件：排除大字体文件
+// 自定义插件：完全排除大字体文件
 function excludeLargeFonts() {
   return {
     name: 'exclude-large-fonts',
     resolveId(id) {
+      // 如果引用了大字体文件，返回一个空模块
       if (id.includes('FZWeiBei-S03_Regular.json') || id.includes('FZLiShu-S01_Regular.json')) {
-        return { id, external: true }
+        return id
+      }
+    },
+    load(id) {
+      // 返回空对象，避免加载大文件
+      if (id.includes('FZWeiBei-S03_Regular.json') || id.includes('FZLiShu-S01_Regular.json')) {
+        return 'export default {}'
       }
     }
   }
@@ -32,19 +39,6 @@ export default defineConfig({
     outDir: 'dist',
     sourcemap: false,
     minify: 'terser',
-    rollupOptions: {
-      output: {
-        manualChunks: undefined,
-        assetFileNames: (assetInfo) => {
-          // 排除大字体文件
-          if (assetInfo.name && assetInfo.name.endsWith('.json') && 
-              (assetInfo.name.includes('FZWeiBei') || assetInfo.name.includes('FZLiShu'))) {
-            return 'excluded/[name][extname]'
-          }
-          return 'assets/[name]-[hash][extname]'
-        }
-      }
-    },
     assetsInlineLimit: 0 // 禁止内联资源
   }
 })
