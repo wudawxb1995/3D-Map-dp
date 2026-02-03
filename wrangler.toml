@@ -1,0 +1,16 @@
+# Cloudflare Pages 配置文件
+name = "vue-3d-map"
+compatibility_date = "2024-01-01"
+
+[build]
+command = "npm run build"
+cwd = "."
+watch_dir = "src"
+
+[build.upload]
+format = "service-worker"
+
+[[build.upload.rules]]
+type = "ESModule"
+globs = ["**/*.js"]
+fallthrough = true
