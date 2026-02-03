@@ -4,6 +4,8 @@ import { resolve } from 'path'
 
 // https://vitejs.dev/config/
 export default defineConfig({
+  // GitHub Pages 部署配置
+  base: process.env.NODE_ENV === 'production' ? '/3D-Map-dp/' : '/',
   plugins: [vue()],
   resolve: {
     alias: {
