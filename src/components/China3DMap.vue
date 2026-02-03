@@ -103,6 +103,12 @@ import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import FZLISHU_TYPEFACE_URL from "@/assets/fonts/FZLiShu-S01_Regular.json?url";
 import FZWEIBEI_TYPEFACE_URL from "@/assets/fonts/FZWeiBei-S03_Regular.json?url";
 
+// 导入图片资源
+import bgImage from "@/assets/image/home/bg.jpg";
+import bgRingImage from "@/assets/image/home/bg-ring.png";
+import quanGuoImage from "@/assets/image/home/quanGuo.png";
+import iconImage from "@/assets/image/home/icon.png";
+
 // 导入新拆分的组件
 import Province3D from "./map-features/Province3D.vue";
 import LightPillars from "./map-features/LightPillars.vue";
@@ -328,7 +334,7 @@ export default {
 
       // 添加背景图
       const textureLoader = new THREE.TextureLoader();
-      textureLoader.load("/src/assets/image/home/bg.jpg", (texture) => {
+      textureLoader.load(bgImage, (texture) => {
         const aspect = width / height;
         const distance = 1500000;
         const vFov = (camera.fov * Math.PI) / 180;
@@ -355,7 +361,7 @@ export default {
       });
 
       // 添加旋转精灵图
-      textureLoader.load("/src/assets/image/home/bg-ring.png", (texture) => {
+      textureLoader.load(bgRingImage, (texture) => {
         const distance = 1400000;
         const vFov = (camera.fov * Math.PI) / 180;
         const viewHeight = 2 * Math.tan(vFov / 2) * distance;
@@ -412,7 +418,7 @@ export default {
 
       const textureLoader = new THREE.TextureLoader();
       const chinaTexture = textureLoader.load(
-        "/src/assets/image/home/quanGuo.png"
+        quanGuoImage
       );
 
       chinaData.features.forEach((feature) => {
@@ -826,7 +832,7 @@ export default {
       });
 
       const textureLoader = new THREE.TextureLoader();
-      const iconImageUrl = "/src/assets/image/home/icon.png";
+      const iconImageUrl = iconImage;
 
       textureLoader.load(
         iconImageUrl,
@@ -1827,7 +1833,7 @@ export default {
       const scale = 120000 / Math.max(bounds.maxX - bounds.minX, bounds.maxY - bounds.minY);
 
       const textureLoader = new THREE.TextureLoader();
-      const chinaTexture = textureLoader.load("/src/assets/image/home/quanGuo.png");
+      const chinaTexture = textureLoader.load(quanGuoImage);
 
       // 渲染每个区域
       geoData.features.forEach((feature) => {
@@ -2034,7 +2040,7 @@ export default {
         provinceIconsArray = [];
         
         const textureLoader = new THREE.TextureLoader();
-        textureLoader.load("/src/assets/image/home/icon.png", (texture) => {
+        textureLoader.load(iconImage, (texture) => {
             data.features.forEach(feature => {
                 const name = feature.properties.name;
                 const pos = calculateProvinceCenterFromGeometry(feature.geometry, center, scale);
