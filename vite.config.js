@@ -4,8 +4,8 @@ import { resolve } from 'path'
 
 // https://vitejs.dev/config/
 export default defineConfig({
-  // GitHub Pages 部署配置 - 直接设置为仓库名
-  base: '/3D-Map-dp/',
+  // Vercel 部署时使用根路径，GitHub Pages 使用子路径
+  base: process.env.VERCEL ? '/' : '/3D-Map-dp/',
   plugins: [vue()],
   resolve: {
     alias: {
