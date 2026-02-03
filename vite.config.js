@@ -19,6 +19,20 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
-    minify: 'terser'
+    minify: 'terser',
+    rollupOptions: {
+      output: {
+        manualChunks: undefined,
+        assetFileNames: (assetInfo) => {
+          // 排除大字体文件
+          if (assetInfo.name && assetInfo.name.endsWith('.json') && 
+              (assetInfo.name.includes('FZWeiBei') || assetInfo.name.includes('FZLiShu'))) {
+            return 'excluded/[name][extname]'
+          }
+          return 'assets/[name]-[hash][extname]'
+        }
+      }
+    },
+    assetsInlineLimit: 0 // 禁止内联资源
   }
 })

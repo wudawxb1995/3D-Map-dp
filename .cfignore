@@ -1,0 +1,4 @@
+# Cloudflare Pages ignore file
+# 排除超过 25MB 的字体文件
+src/assets/fonts/FZWeiBei-S03_Regular.json
+src/assets/fonts/FZLiShu-S01_Regular.json
